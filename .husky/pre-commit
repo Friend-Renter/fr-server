@@ -1,0 +1,5 @@
+#!/bin/sh
+# Minimal Husky v9 hook — no husky.sh sourcing.
+# Run lint-staged inside the server package.
+cd server || exit 1
+npx lint-staged
