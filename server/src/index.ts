@@ -1,16 +1,39 @@
-// Minimal boot just to prove the toolchain works.
-// We'll replace this with real app wiring in Step 3.
+// server/src/index.ts
+/** Boot file: creates HTTP server, starts listening, and handles graceful shutdown. */
+
+import http from "http";
+
+import app from "./app.js";
+import { env } from "./config/env.js";
+import { logger } from "./config/logger.js";
+
+const server = http.createServer(app);
+
+process.on("uncaughtException", (err) => {
+  logger.error("Uncaught exception", { err });
+});
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled rejection", { reason });
+});
+
 const start = async () => {
-  // Simulate async boot steps (env load, etc.) later.
-  // For now: log and keep process alive.
-  // eslint-disable-next-line no-console
-  console.log("[FR] server toolchain online (C0-Step2).");
-  // Keep the process alive so ts-node-dev can watch files.
-  process.on("SIGINT", () => {
-    // eslint-disable-next-line no-console
-    console.log("\n[FR] shutting down...");
-    process.exit(0);
+  server.listen(env.PORT, () => {
+    logger.info(`FR server listening on :${env.PORT}`, { env: env.NODE_ENV });
   });
 };
+
+const shutdown = (signal: string) => {
+  logger.warn(`Received ${signal}, shutting down...`);
+  server.close(() => {
+    logger.info("Server closed");
+    process.exit(0);
+  });
+  setTimeout(() => {
+    logger.error("Forced shutdown");
+    process.exit(1);
+  }, 10_000).unref();
+};
+
+["SIGINT", "SIGTERM"].forEach((sig) => process.on(sig as NodeJS.Signals, () => shutdown(sig)));
 
 start();
