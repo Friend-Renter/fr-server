@@ -5,14 +5,13 @@ import { env } from "./env.js";
 
 let connecting: Promise<void> | null = null;
 
-async function ensureMongo(): Promise<void> {
-  if (mongoose.connection.readyState === 1) return; // connected
+export async function connectMongo(): Promise<void> {
+  if (mongoose.connection.readyState === 1) return;
   if (connecting) return connecting;
 
   connecting = mongoose
-    .connect(env.MONGO_URI, {
-      serverSelectionTimeoutMS: 3000, // bump to 5000 if your network is slow
-    } as any)
+    .connect(env.MONGO_URI, { serverSelectionTimeoutMS: 3000 } as any)
+    .then(() => {}) // ensure Promise<void>
     .finally(() => {
       connecting = null;
     });
@@ -22,8 +21,10 @@ async function ensureMongo(): Promise<void> {
 
 export async function pingMongo(): Promise<{ status: "ok" | "error"; message?: string }> {
   try {
-    await ensureMongo();
-    await mongoose.connection.db.admin().command({ ping: 1 });
+    await connectMongo();
+    const db = mongoose.connection.db;
+    if (!db) throw new Error("Mongo connection not ready");
+    await db.admin().command({ ping: 1 });
     return { status: "ok" };
   } catch (err: any) {
     return { status: "error", message: err?.message || String(err) };
