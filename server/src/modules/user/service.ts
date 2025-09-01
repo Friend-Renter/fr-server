@@ -42,6 +42,11 @@ export async function findByEmail(
   return q.exec();
 }
 
+export async function findById(id: string): Promise<UserDoc | null> {
+  await connectMongo();
+  return User.findById(id).exec();
+}
+
 /** Verify password (requires a doc with passwordHash selected) */
 export async function verifyPassword(plain: string, userWithHash: UserDoc): Promise<boolean> {
   // Will throw if passwordHash wasn't selected
