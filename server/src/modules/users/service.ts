@@ -7,53 +7,60 @@ function normEmail(email: string) {
   return email.trim().toLowerCase();
 }
 
-/** Create a user. Set the virtual `password` to trigger hashing in the model. */
-export async function createUser(input: {
+export type CreateUserInput = {
   email: string;
   password: string;
-  role?: Role;
-  firstName?: string;
-  lastName?: string;
-}): Promise<UserDoc> {
+  firstName: string;
+  lastName: string;
+  role?: "renter" | "host" | "admin";
+};
+
+export async function createUser(input: CreateUserInput): Promise<UserDoc> {
   await connectMongo();
   const doc = new User({
-    email: normEmail(input.email),
-    role: input.role ?? "renter",
+    email: input.email,
     firstName: input.firstName,
     lastName: input.lastName,
-  }) as any;
+    role: input.role ?? "renter",
+  } as Partial<UserDoc>) as any;
 
-  doc.password = input.password; // virtual setter (model will hash)
-  const saved = await (doc as UserDoc).save();
-  return saved;
+  // trigger hashing via virtual
+  doc.password = input.password;
+  await doc.save();
+  return doc;
 }
 
-/** Find by email (optionally include passwordHash for auth flows) */
 export async function findByEmail(
   email: string,
   opts?: { withPassword?: boolean }
 ): Promise<UserDoc | null> {
   await connectMongo();
-  const q = User.findOne({ email: normEmail(email) });
-  if (opts?.withPassword) {
-    // passwordHash is select:false by default; explicitly include it
-    q.select("+passwordHash");
-  }
+  const q = User.findOne({ email: email.toLowerCase().trim() });
+  if (opts?.withPassword) q.select("+passwordHash");
   return q.exec();
 }
 
-export async function findById(id: string): Promise<UserDoc | null> {
+export async function findById(
+  id: string,
+  opts?: { withPassword?: boolean }
+): Promise<UserDoc | null> {
   await connectMongo();
-  return User.findById(id).exec();
+  const q = User.findById(id);
+  if (opts?.withPassword) q.select("+passwordHash");
+  return q.exec();
 }
 
-/** Verify password (requires a doc with passwordHash selected) */
-export async function verifyPassword(plain: string, userWithHash: UserDoc): Promise<boolean> {
-  // Will throw if passwordHash wasn't selected
-  return userWithHash.isCorrectPassword(plain);
+export async function verifyPassword(password: string, user: UserDoc): Promise<boolean> {
+  if ((user as any).passwordHash) {
+    return User.hydrate(user).isCorrectPassword(password);
+  }
+  // If passwordHash not selected, re-fetch with hash
+  const fresh = await findById(user.id, { withPassword: true });
+  if (!fresh) return false;
+  return fresh.isCorrectPassword(password);
 }
 
-/** Shape a safe public payload */
+/** Safe public shape for API responses */
 export function toPublicUser(u: UserDoc) {
   return {
     id: u.id,
@@ -61,11 +68,13 @@ export function toPublicUser(u: UserDoc) {
     role: u.role,
     firstName: u.firstName,
     lastName: u.lastName,
-    fullName: u.get("fullName"),
+    fullName: u.fullName,
     isEmailVerified: u.isEmailVerified,
     isActive: u.isActive,
-    deactivatedAt: u.deactivatedAt,
+    deactivatedAt: u.deactivatedAt ?? null,
+    kycStatus: u.kycStatus,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
+    // NOTE: intentionally excluding defaultAddress & payout from public user for now
   };
 }
