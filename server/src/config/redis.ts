@@ -13,11 +13,15 @@ function getClient(): RedisClientType {
     });
     client.on("error", (e) => {
       // Avoid noisy unhandled errors; health endpoint will report status instead.
-       
+
       console.warn("[redis] client error:", (e as any)?.message || e);
     });
   }
   return client;
+}
+
+export function redisClient() {
+  return getClient();
 }
 
 /** Build a namespaced Redis key: e.g., fr:dev:rate:ip:1.2.3.4 */
