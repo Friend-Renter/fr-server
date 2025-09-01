@@ -2,28 +2,43 @@ import "dotenv/config";
 import mongoose from "mongoose";
 
 import { connectMongo } from "../src/config/db";
-// Import models to register their schemas with Mongoose in this process
+// ensure models are registered
 import "../src/modules/users/model";
 import "../src/modules/assets/model";
 import "../src/modules/listings/model";
 import "../src/modules/locks/model";
+import "../src/modules/bookings/model";
 
 async function main() {
   await connectMongo();
 
-  const models = ["User", "Asset", "BookingLock"].map((n) => mongoose.model(n));
-  for (const m of models) {
+  // 1) Sync model indexes (creates collections if needed)
+  const modelNames = ["User", "Asset", "Listing", "BookingLock", "Booking"] as const;
+  for (const modelName of modelNames) {
+    const m = mongoose.model(modelName);
     console.log(`→ syncing indexes for ${m.modelName}...`);
     await m.syncIndexes();
   }
 
+  // 2) Print indexes safely (guard for missing collections & avoid 'listIndexes: <nil>')
+  const collections = ["users", "assets", "listings", "bookinglocks", "bookings"] as const;
   const db = mongoose.connection.db!;
-  for (const name of ["users", "assets", "listings", "bookinglocks"] as const) {
-    const idx = await db.collection(name).indexes();
-    console.log(
-      `${name} indexes:`,
-      idx.map((i) => i.name)
-    );
+  for (const colName of collections) {
+    try {
+      const exists = await db.listCollections({ name: colName }).hasNext();
+      if (!exists) {
+        console.log(`${colName}: (no collection yet)`);
+        continue;
+      }
+      const col = db.collection(colName);
+      const idx = await col.indexes();
+      console.log(
+        `${colName} indexes:`,
+        idx.map((i) => i.name)
+      );
+    } catch (e: any) {
+      console.log(`${colName}: could not list indexes ->`, e.codeName || e.message);
+    }
   }
 
   await mongoose.disconnect();
