@@ -2,6 +2,8 @@
 /** API surface: health endpoints now; later mounts feature routers (e.g., /users, /listings). */
 import { Router } from "express";
 
+import { pingMongo } from "./config/db.js";
+import { pingRedis } from "./config/redis.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
 
 export const router = Router();
@@ -16,11 +18,16 @@ router.get(
   })
 );
 
-// Dependencies health (Mongo/Redis to be wired later)
+// Dependencies health (actual pings)
 router.get(
   "/health/deps",
   asyncHandler(async (_req, res) => {
-    jsonOk(res, { mongo: "skipped", redis: "skipped" });
+    const [mongo, redis] = await Promise.all([pingMongo(), pingRedis()]);
+    const result: any = { mongo: mongo.status, redis: redis.status };
+    if (mongo.status === "error" || redis.status === "error") {
+      result.details = { mongo: mongo.message, redis: redis.message };
+    }
+    jsonOk(res, result);
   })
 );
 
