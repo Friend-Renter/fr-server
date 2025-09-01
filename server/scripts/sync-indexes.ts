@@ -13,7 +13,14 @@ async function main() {
   await connectMongo();
 
   // 1) Sync model indexes (creates collections if needed)
-  const modelNames = ["User", "Asset", "Listing", "BookingLock", "Booking"] as const;
+  const modelNames = [
+    "User",
+    "Asset",
+    "Listing",
+    "BookingLock",
+    "Booking",
+    "Verification",
+  ] as const;
   for (const modelName of modelNames) {
     const m = mongoose.model(modelName);
     console.log(`→ syncing indexes for ${m.modelName}...`);
@@ -21,7 +28,14 @@ async function main() {
   }
 
   // 2) Print indexes safely (guard for missing collections & avoid 'listIndexes: <nil>')
-  const collections = ["users", "assets", "listings", "bookinglocks", "bookings"] as const;
+  const collections = [
+    "users",
+    "assets",
+    "listings",
+    "bookinglocks",
+    "bookings",
+    "verifications",
+  ] as const;
   const db = mongoose.connection.db!;
   for (const colName of collections) {
     try {

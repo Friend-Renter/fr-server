@@ -15,6 +15,9 @@ import { requestId } from "./utils/ids.js";
 
 const app = express();
 
+// ⚠️ must be before json/urlencoded so we can verify signature on the raw payload
+app.use("/webhooks/persona", express.raw({ type: "application/json" }));
+
 // security + parsing
 app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
