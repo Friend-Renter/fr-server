@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 
 import jwt, { type JwtPayload } from "jsonwebtoken";
 
-import { env } from "../config/env.js";
+import { env } from "../../config/env.js";
 
 export type Role = "renter" | "host" | "admin";
 
