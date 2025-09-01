@@ -70,13 +70,13 @@ UserSchema.virtual("fullName").get(function (this: UserDoc) {
   return [fn, ln].filter(Boolean).join(" ");
 });
 
-/** Virtual (write-only): password -> sets a private _password field (hashed in hooks) */
+/** Virtual (write-only): password -> sets a private _password */
 UserSchema.virtual("password")
   .set(function (this: any, plain: string) {
     this._password = typeof plain === "string" ? plain : "";
   })
-  .get(function (this: any) {
-    return undefined; // never expose
+  .get(function () {
+    return undefined;
   });
 
 /** Instance methods */
@@ -113,7 +113,7 @@ UserSchema.method("reactivate", async function reactivate(this: UserDoc) {
 });
 
 /** Pre-save: hash when virtual `password` is set */
-UserSchema.pre("save", async function (next) {
+UserSchema.pre("validate", async function (next) {
   const self = this as any;
   if (self._password) {
     if (self._password.length < 8) {
