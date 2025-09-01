@@ -1,39 +1,98 @@
-/** Users model (TS/ESM) — virtual `password`, hooks, instance methods, familiar to your style */
 import bcrypt from "bcrypt";
-import mongoose, { Schema, type Model, type HydratedDocument } from "mongoose";
+import mongoose, { Schema, type Model } from "mongoose";
 
 import { env } from "../../config/env.js";
 
+/** Roles for FR */
 export type Role = "renter" | "host" | "admin";
 
-export interface User {
-  firstName?: string;
-  lastName?: string;
+/** KYC lifecycle */
+export type KycStatus = "unverified" | "pending" | "verified" | "rejected";
+
+/** GeoJSON Point (WGS84). Store as [lng, lat]. */
+const GeoPointSchema = new Schema(
+  {
+    type: { type: String, enum: ["Point"], default: "Point", required: true },
+    coordinates: {
+      type: [Number], // [lng, lat]
+      validate: {
+        validator: (v: number[]) => Array.isArray(v) && v.length === 2,
+        message: "coordinates must be [lng, lat]",
+      },
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
+/** Postal address with optional geocode */
+const AddressSchema = new Schema(
+  {
+    street1: { type: String },
+    street2: { type: String },
+    city: { type: String },
+    state: { type: String },
+    postalCode: { type: String },
+    country: { type: String, default: "US" },
+    /** Optional precise point for proximity queries */
+    location: { type: GeoPointSchema, required: false },
+  },
+  { _id: false }
+);
+
+/** Payout provider (Stripe Connect stub for now) */
+const PayoutSchema = new Schema(
+  {
+    provider: { type: String, enum: ["stripe"], default: "stripe" },
+    stripe: {
+      accountId: { type: String }, // acct_xxx
+      onboarded: { type: Boolean, default: false },
+    },
+  },
+  { _id: false }
+);
+
+export interface UserDoc extends mongoose.Document {
   email: string;
-  isEmailVerified: boolean;
-  passwordHash: string; // stored (never expose)
+  firstName: string;
+  lastName: string;
   role: Role;
+  isEmailVerified: boolean;
+
+  /** Security */
+  passwordHash: string;
+
+  /** Account flags */
   isActive: boolean;
   deactivatedAt: Date | null;
+
+  /** New fields (C2-B) */
+  kycStatus: KycStatus;
+  defaultAddress?: {
+    street1?: string;
+    street2?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+    location?: { type: "Point"; coordinates: [number, number] }; // [lng, lat]
+  };
+  payout?: {
+    provider: "stripe";
+    stripe?: { accountId?: string; onboarded?: boolean };
+  };
+
+  /** Timestamps (from { timestamps: true }) */
   createdAt: Date;
   updatedAt: Date;
-}
 
-export interface UserMethods {
-  /** Virtual getter is exposed as doc.get('fullName'); this method is a convenience */
-  getFullName(): string;
+  /** Virtuals / methods */
+  fullName: string;
   isCorrectPassword(password: string): Promise<boolean>;
-  deactivate(): Promise<UserDoc>;
-  reactivate(): Promise<UserDoc>;
 }
 
-export type UserDoc = HydratedDocument<User, UserMethods>;
-export type UserModel = Model<User, {}, UserMethods>;
-
-const UserSchema = new Schema<User, UserModel, UserMethods>(
+const UserSchema = new Schema<UserDoc>(
   {
-    firstName: { type: String, trim: true, maxlength: 50 },
-    lastName: { type: String, trim: true, maxlength: 50 },
     email: {
       type: String,
       required: true,
@@ -41,36 +100,35 @@ const UserSchema = new Schema<User, UserModel, UserMethods>(
       lowercase: true,
       trim: true,
       match: [/.+@.+\..+/, "Must use a valid email address"],
-      index: true,
     },
+    firstName: { type: String, required: true, trim: true, maxlength: 50 },
+    lastName: { type: String, required: true, trim: true, maxlength: 50 },
+    role: { type: String, enum: ["renter", "host", "admin"], default: "renter" },
     isEmailVerified: { type: Boolean, default: false },
-    passwordHash: { type: String, required: true, select: false }, // hidden by default
-    role: { type: String, enum: ["renter", "host", "admin"], default: "renter", index: true },
+
+    passwordHash: { type: String, required: true, select: false },
+
     isActive: { type: Boolean, default: true },
     deactivatedAt: { type: Date, default: null },
-  },
-  {
-    timestamps: true,
-    versionKey: false,
-    toJSON: {
-      virtuals: true,
-      transform(_doc, ret) {
-        delete (ret as any).passwordHash;
-        return ret;
-      },
+
+    /** C2-B additions */
+    kycStatus: {
+      type: String,
+      enum: ["unverified", "pending", "verified", "rejected"],
+      default: "unverified",
     },
-    toObject: { virtuals: true },
-  }
+    defaultAddress: { type: AddressSchema, required: false },
+    payout: { type: PayoutSchema, required: false },
+  },
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
 
-/** Virtual: fullName */
+/** Virtual full name */
 UserSchema.virtual("fullName").get(function (this: UserDoc) {
-  const fn = this.firstName?.trim() || "";
-  const ln = this.lastName?.trim() || "";
-  return [fn, ln].filter(Boolean).join(" ");
+  return `${this.firstName} ${this.lastName}`.trim();
 });
 
-/** Virtual (write-only): password -> sets a private _password */
+/** Write-only virtual for password: sets a private _password to be hashed */
 UserSchema.virtual("password")
   .set(function (this: any, plain: string) {
     this._password = typeof plain === "string" ? plain : "";
@@ -79,40 +137,7 @@ UserSchema.virtual("password")
     return undefined;
   });
 
-/** Instance methods */
-UserSchema.method("getFullName", function getFullName(this: UserDoc) {
-  return this.get("fullName");
-});
-UserSchema.method(
-  "isCorrectPassword",
-  async function isCorrectPassword(this: UserDoc, password: string) {
-    // passwordHash may be excluded unless explicitly selected
-    const hash = (this as any).passwordHash as string | undefined;
-    if (!hash) {
-      const err = new Error("passwordHash not selected on document");
-      (err as any).code = "PASSWORD_HASH_NOT_SELECTED";
-      throw err;
-    }
-    if (!hash) {
-      const err = new Error("passwordHash not selected on document");
-      (err as any).code = "PASSWORD_HASH_NOT_SELECTED";
-      throw err;
-    }
-    return bcrypt.compare(password, hash);
-  }
-);
-UserSchema.method("deactivate", async function deactivate(this: UserDoc) {
-  this.isActive = false;
-  this.deactivatedAt = new Date();
-  return this.save();
-});
-UserSchema.method("reactivate", async function reactivate(this: UserDoc) {
-  this.isActive = true;
-  this.deactivatedAt = null;
-  return this.save();
-});
-
-/** Pre-save: hash when virtual `password` is set */
+/** Hash before validation so required passwordHash passes */
 UserSchema.pre("validate", async function (next) {
   const self = this as any;
   if (self._password) {
@@ -126,41 +151,44 @@ UserSchema.pre("validate", async function (next) {
   next();
 });
 
-/** Pre-findOneAndUpdate: support updating `password` (virtual) */
+/** Hash on findOneAndUpdate({ password }) */
 UserSchema.pre("findOneAndUpdate", async function (next) {
   const update: any = this.getUpdate() || {};
-  const pwd = update.password ?? update.$set?.password ?? update.$setOnInsert?.password;
-
-  if (pwd) {
-    if (typeof pwd !== "string" || pwd.length < 8) {
-      return next(new Error("Password must be at least 8 characters"));
-    }
-    const rounds = env.BCRYPT_ROUNDS;
-    const hash = await bcrypt.hash(pwd, rounds);
-
-    // Clean virtual from update; set passwordHash instead
-    if (update.password) delete update.password;
-    if (update.$set?.password) delete update.$set.password;
-    if (update.$setOnInsert?.password) delete update.$setOnInsert.password;
-
-    update.$set = { ...(update.$set || {}), passwordHash: hash };
+  if (update.password) {
+    update.passwordHash = await bcrypt.hash(update.password, env.BCRYPT_ROUNDS);
+    delete update.password;
     this.setUpdate(update);
   }
   next();
 });
 
-/** Duplicate key error normalization (email unique) */
-function dupKeyHandler(err: any, _doc: any, next: (err?: any) => void) {
-  if (err?.name === "MongoServerError" && err?.code === 11000 && err?.keyPattern?.email) {
-    const e = new Error("Email already in use");
-    (e as any).code = "EMAIL_TAKEN";
-    (e as any).status = 409;
-    return next(e);
+/** Duplicate key friendly message */
+UserSchema.post(
+  "save",
+  function (
+    error: mongoose.CallbackError,
+    _doc: any,
+    next: (err?: mongoose.CallbackError) => void
+  ) {
+    if (
+      (error as any)?.name === "MongoServerError" &&
+      (error as any)?.code === 11000 &&
+      (error as any)?.keyPattern?.email
+    ) {
+      next(Object.assign(new Error("Email already exists"), { code: "EMAIL_TAKEN" }));
+    } else {
+      next(error);
+    }
   }
-  next(err);
-}
-UserSchema.post("save", dupKeyHandler as any);
-UserSchema.post("findOneAndUpdate", dupKeyHandler as any);
-UserSchema.post("insertMany", dupKeyHandler as any);
+);
 
-export const User = mongoose.models.User || mongoose.model<User, UserModel>("User", UserSchema);
+/** Methods */
+UserSchema.methods.isCorrectPassword = async function (password: string) {
+  return bcrypt.compare(password, this.passwordHash);
+};
+
+/** Indexes */
+UserSchema.index({ "defaultAddress.location": "2dsphere" });
+
+export const User: Model<UserDoc> =
+  mongoose.models.User || mongoose.model<UserDoc>("User", UserSchema);
