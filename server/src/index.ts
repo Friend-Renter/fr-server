@@ -4,8 +4,10 @@
 import http from "http";
 
 import app from "./app.js";
+import { closeMongo } from "./config/db.js";
 import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
+import { closeRedis } from "./config/redis.js";
 
 const server = http.createServer(app);
 
@@ -24,14 +26,16 @@ const start = async () => {
 
 const shutdown = (signal: string) => {
   logger.warn(`Received ${signal}, shutting down...`);
-  server.close(() => {
-    logger.info("Server closed");
-    process.exit(0);
+  Promise.allSettled([closeMongo(), closeRedis()]).finally(() => {
+    server.close(() => {
+      logger.info("Server closed");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      logger.error("Forced shutdown");
+      process.exit(1);
+    }, 10_000).unref();
   });
-  setTimeout(() => {
-    logger.error("Forced shutdown");
-    process.exit(1);
-  }, 10_000).unref();
 };
 
 ["SIGINT", "SIGTERM"].forEach((sig) => process.on(sig as NodeJS.Signals, () => shutdown(sig)));
