@@ -5,8 +5,8 @@ import { refreshSchema } from "./schemas.js";
 import { persistSession, revokeSession, isSessionActive } from "./sessions.js";
 import { verifyRefresh, signAccessToken, signRefreshToken } from "./tokens.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
-import { createUser, findByEmail, toPublicUser, verifyPassword } from "../user/service.js";
-import { findById } from "../user/service.js";
+import { createUser, findByEmail, toPublicUser, verifyPassword } from "../users/service.js";
+import { findById } from "../users/service.js";
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
   const body = registerSchema.parse(req.body);
@@ -92,11 +92,9 @@ export const refresh = asyncHandler(async (req: Request, res: Response) => {
   // 2) Check active session
   const active = await isSessionActive(claims.sub, claims.jti);
   if (!active) {
-    return res
-      .status(401)
-      .json({
-        error: { code: "INVALID_REFRESH", message: "Refresh session not found or expired" },
-      });
+    return res.status(401).json({
+      error: { code: "INVALID_REFRESH", message: "Refresh session not found or expired" },
+    });
   }
 
   // 3) Rotate: revoke old session, issue new pair

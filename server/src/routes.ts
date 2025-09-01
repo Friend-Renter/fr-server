@@ -5,11 +5,13 @@ import { Router } from "express";
 import { pingMongo } from "./config/db.js";
 import { pingRedis } from "./config/redis.js";
 import authRouter from "./modules/auth/routes.js";
+import usersRouter from "./modules/users/routes.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
 
 export const router = Router();
 
 router.use("/auth", authRouter);
+router.use("/", usersRouter); // exposes GET /me
 
 // Basic health (no deps)
 router.get(
