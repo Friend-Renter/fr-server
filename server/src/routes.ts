@@ -14,7 +14,6 @@ export const router = Router();
 router.use("/auth", authRouter);
 router.use("/", usersRouter); // exposes GET /me
 router.use("/kyc", kycRouter);
-router.post("/webhooks/persona", personaWebhook);
 
 // Basic health (no deps)
 router.get(

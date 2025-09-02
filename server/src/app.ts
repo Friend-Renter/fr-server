@@ -10,13 +10,14 @@ import { httpLogStream, logger } from "./config/logger.js";
 import { errorHandler } from "./middlewares/error.js";
 import { notFound } from "./middlewares/notFound.js";
 import { rateLimit } from "./middlewares/rateLimit.js";
+import { personaWebhook } from "./modules/verifications/http.js";
 import router from "./routes.js";
 import { requestId } from "./utils/ids.js";
 
 const app = express();
 
-// ⚠️ must be before json/urlencoded so we can verify signature on the raw payload
-app.use("/webhooks/persona", express.raw({ type: "application/json" }));
+// ✅ Only the webhook route gets raw body
+app.post("/webhooks/persona", express.raw({ type: "application/json" }), personaWebhook);
 
 // security + parsing
 app.use(helmet());

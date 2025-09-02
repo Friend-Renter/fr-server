@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 
+import { getAuth } from "./auth.js";
 import { User } from "../modules/users/model.js";
 /**
  * Require that req.user exists (Auth middleware) AND user.kycStatus meets min.
@@ -14,18 +15,18 @@ export function requireKyc(min: "verified" | "pending" = "verified") {
   };
 
   return async (req: Request, res: Response, next: NextFunction) => {
-    const auth = (req as any).user;
-    if (!auth) {
+    let auth;
+    try {
+      auth = getAuth(req); // throws if requireAuth wasn't run
+    } catch {
       return res.status(401).json({ error: { code: "UNAUTHORIZED", message: "Auth required" } });
     }
 
-    let status = auth.kycStatus;
+    let status = (auth as any).kycStatus; // if you decide to embed later
     if (!status) {
-      // Fallback: fetch once if JWT didn't include it
-      const u = await User.findById(auth.sub).select("kycStatus").lean();
+      const u = await User.findById(auth.userId).select("kycStatus").lean();
       status = u?.kycStatus || "unverified";
-      // Optionally cache onto req for downstream
-      (req as any).user.kycStatus = status;
+      (req as any).auth.kycStatus = status; // cache for downstream
     }
 
     if (rank(status) < rank(min)) {

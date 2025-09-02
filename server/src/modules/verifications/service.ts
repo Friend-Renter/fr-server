@@ -92,20 +92,25 @@ export async function handlePersonaWebhook(
   const newStatus = mapPersonaToOurStatus(eventType, personaStatus);
 
   // Upsert verification, attach userId if we have reference_id
-  const update: any = {
-    $set: { status: newStatus },
-    $push: { events: { type: eventType, at: new Date(), raw: body } },
+  const setFields: any = {
+    provider: "persona",
+    externalId,
+    status: newStatus,
   };
   if (referenceUserId) {
-    update.$set.userId = new mongoose.Types.ObjectId(referenceUserId);
+    setFields.userId = new mongoose.Types.ObjectId(referenceUserId);
   }
 
-  const v = await Verification.findOneAndUpdate({ provider: "persona", externalId }, update, {
-    upsert: true,
-    new: true,
-  }).exec();
+  const v = await Verification.findOneAndUpdate(
+    { provider: "persona", externalId },
+    {
+      $set: setFields,
+      $push: { events: { type: eventType, at: new Date(), raw: body } },
+      // $setOnInsert not needed here for userId; timestamps handled by schema
+    },
+    { upsert: true, new: true }
+  ).exec();
 
-  // If we know which user this belongs to, update their status
   const userId = v.userId?.toString() || referenceUserId;
   if (userId) {
     await User.findByIdAndUpdate(
