@@ -27,6 +27,15 @@ const EnvSchema = z.object({
   JWT_ISS: z.string().default("fr-api"),
   JWT_AUD: z.string().default("fr-clients"),
   BCRYPT_ROUNDS: z.coerce.number().int().min(8).max(15).default(12),
+  KYC_PROVIDER: z.string().default("persona"),
+  KYC_MOCK: z
+    .string()
+    .default("true")
+    .transform((v) => v === "true"),
+  PERSONA_API_KEY: z.string().optional().default(""),
+  PERSONA_ENV: z.string().default("sandbox"), // sandbox | production
+  PERSONA_TEMPLATE_ID: z.string().optional().default(""),
+  PERSONA_WEBHOOK_SECRET: z.string().optional().default(""),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

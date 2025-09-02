@@ -7,7 +7,7 @@ import { env } from "../../config/env.js";
 export type Role = "renter" | "host" | "admin";
 
 /** KYC lifecycle */
-export type KycStatus = "unverified" | "pending" | "verified" | "rejected";
+export type KycStatus = "unverified" | "pending" | "verified" | "failed" | "rejected";
 
 /** GeoJSON Point (WGS84). Store as [lng, lat]. */
 const GeoPointSchema = new Schema(
@@ -68,6 +68,7 @@ export interface UserDoc extends mongoose.Document {
 
   /** New fields (C2-B) */
   kycStatus: KycStatus;
+  kycUpdatedAt?: Date | null;
   defaultAddress?: {
     street1?: string;
     street2?: string;
@@ -112,11 +113,14 @@ const UserSchema = new Schema<UserDoc>(
     deactivatedAt: { type: Date, default: null },
 
     /** C2-B additions */
+    // KYC
     kycStatus: {
       type: String,
-      enum: ["unverified", "pending", "verified", "rejected"],
+      enum: ["unverified", "pending", "verified", "failed", "rejected"],
       default: "unverified",
+      index: true,
     },
+    kycUpdatedAt: { type: Date },
     defaultAddress: { type: AddressSchema, required: false },
     payout: { type: PayoutSchema, required: false },
   },
