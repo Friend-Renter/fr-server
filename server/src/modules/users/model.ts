@@ -118,7 +118,6 @@ const UserSchema = new Schema<UserDoc>(
       type: String,
       enum: ["unverified", "pending", "verified", "failed", "rejected"],
       default: "unverified",
-      index: true,
     },
     kycUpdatedAt: { type: Date },
     defaultAddress: { type: AddressSchema, required: false },
@@ -193,6 +192,9 @@ UserSchema.methods.isCorrectPassword = async function (password: string) {
 
 /** Indexes */
 UserSchema.index({ "defaultAddress.location": "2dsphere" });
+// at bottom of users/model.ts (near indexes)
+UserSchema.index({ role: 1 });
+UserSchema.index({ kycStatus: 1 });
 
 export const User: Model<UserDoc> =
   mongoose.models.User || mongoose.model<UserDoc>("User", UserSchema);

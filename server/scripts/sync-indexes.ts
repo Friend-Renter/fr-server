@@ -8,6 +8,9 @@ import "../src/modules/assets/model";
 import "../src/modules/listings/model";
 import "../src/modules/locks/model";
 import "../src/modules/bookings/model";
+import "../src/modules/verifications/model";
+import "../src/modules/audit/model.js";
+import "../src/modules/features/model.js";
 
 async function main() {
   await connectMongo();
@@ -20,6 +23,8 @@ async function main() {
     "BookingLock",
     "Booking",
     "Verification",
+    "FeatureFlag",
+    "AuditLog",
   ] as const;
   for (const modelName of modelNames) {
     const m = mongoose.model(modelName);
@@ -35,6 +40,8 @@ async function main() {
     "bookinglocks",
     "bookings",
     "verifications",
+    "featureflags",
+    "auditlogs",
   ] as const;
   const db = mongoose.connection.db!;
   for (const colName of collections) {
