@@ -40,7 +40,7 @@ export interface ListingDoc extends mongoose.Document {
   blackouts: Array<{ start: Date; end: Date; reason?: string }>;
   cancellationPolicy: CancellationPolicy;
   status: ListingStatus;
-
+  moderationReason?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,7 +60,7 @@ const ListingSchema = new Schema<ListingDoc>(
       enum: ["flexible", "moderate", "strict"],
       default: "moderate",
     },
-
+    moderationReason: { type: String },
     status: {
       type: String,
       enum: ["draft", "active", "suspended", "archived"],
