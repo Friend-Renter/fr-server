@@ -1,7 +1,7 @@
 // src/modules/quotes/routes.ts
 import { Router } from "express";
 import mongoose from "mongoose";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { enumerateBuckets, toUtcMidnight } from "../../utils/dates.js";
 import { asyncHandler } from "../../utils/http.js";

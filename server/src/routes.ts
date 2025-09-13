@@ -7,23 +7,27 @@ import { pingRedis } from "./config/redis.js";
 import adminRouter from "./modules/admin/routes.js";
 import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
-import listingsHttp from "./modules/listings/http.js";
-import quotesRouter from "./modules/quotes/http.js";
-import searchRouter from "./modules/search/http.js";
+import listingsRouter from "./modules/listings/routes.js";
+import quotesRouter from "./modules/quotes/routes.js";
+import searchRouter from "./modules/search/routes.js";
 import usersRouter from "./modules/users/routes.js";
-import { kycRouter, personaWebhook } from "./modules/verifications/http.js";
+import { kycRouter, personaWebhook } from "./modules/verifications/routes.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
 
 export const router = Router();
 
+// Feature mounts
 router.use("/auth", authRouter);
-router.use("/", usersRouter); // exposes GET /me
-router.use("/kyc", kycRouter);
+router.use("/", usersRouter); // e.g., GET /me
+router.use("/", assetsRouter); // defines /assets
+router.use("/search", searchRouter); // GET /search
+router.use("/quotes", quotesRouter); // POST /quotes/preview
+router.use("/listings", listingsRouter); // GET /listings/:id/availability
 router.use("/admin", adminRouter);
-router.use("/search", searchRouter);
-router.use("/listings", listingsHttp);
-router.use("/quotes", quotesRouter);
-router.use("/", assetsRouter);
+
+// KYC
+router.use("/kyc", kycRouter);
+router.post("/webhooks/persona", personaWebhook);
 
 // Basic health (no deps)
 router.get(

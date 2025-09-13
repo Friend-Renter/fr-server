@@ -1,5 +1,5 @@
 // zod schemas for admin endpoints
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export const pageQuery = z.object({
   page: z.coerce.number().int().positive().default(1),

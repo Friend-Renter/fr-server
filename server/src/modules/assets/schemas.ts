@@ -1,5 +1,5 @@
 // src/modules/assets/schemas.ts
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export const GeoPointInput = z.object({
   type: z.literal("Point"),
