@@ -1,7 +1,7 @@
 // server/src/config/env.ts
 /** Environment loader: reads .env, validates with Zod, exports typed config and CORS origins array. */
 import "dotenv/config";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
