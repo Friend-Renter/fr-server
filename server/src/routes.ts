@@ -5,7 +5,11 @@ import { Router } from "express";
 import { pingMongo } from "./config/db.js";
 import { pingRedis } from "./config/redis.js";
 import adminRouter from "./modules/admin/routes.js";
+import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
+import listingsHttp from "./modules/listings/http.js";
+import quotesRouter from "./modules/quotes/http.js";
+import searchRouter from "./modules/search/http.js";
 import usersRouter from "./modules/users/routes.js";
 import { kycRouter, personaWebhook } from "./modules/verifications/http.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
@@ -16,6 +20,10 @@ router.use("/auth", authRouter);
 router.use("/", usersRouter); // exposes GET /me
 router.use("/kyc", kycRouter);
 router.use("/admin", adminRouter);
+router.use("/search", searchRouter);
+router.use("/listings", listingsHttp);
+router.use("/quotes", quotesRouter);
+router.use("/", assetsRouter);
 
 // Basic health (no deps)
 router.get(

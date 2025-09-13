@@ -1,6 +1,11 @@
 /** Mongo connector + ping using Mongoose (Atlas-friendly) */
 import mongoose from "mongoose";
 
+// Fail immediately if a model op runs before connect()
+mongoose.set("bufferCommands", false);
+// Helps ensure collections/indexes get created in dev
+mongoose.set("autoCreate", true);
+
 import { env } from "./env.js";
 
 let connecting: Promise<void> | null = null;

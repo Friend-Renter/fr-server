@@ -4,10 +4,10 @@
 import http from "http";
 
 import app from "./app.js";
-import { closeMongo } from "./config/db.js";
+import { connectMongo, closeMongo } from "./config/db.js";
 import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
-import { closeRedis } from "./config/redis.js";
+import { pingRedis, closeRedis } from "./config/redis.js";
 
 const server = http.createServer(app);
 
@@ -19,9 +19,18 @@ process.on("unhandledRejection", (reason) => {
 });
 
 const start = async () => {
-  server.listen(env.PORT, () => {
-    logger.info(`FR server listening on :${env.PORT}`, { env: env.NODE_ENV });
-  });
+  try {
+    // 🔌 ensure data deps are up before listening
+    await connectMongo();
+    await pingRedis();
+
+    server.listen(env.PORT, () => {
+      logger.info(`FR server listening on :${env.PORT}`, { env: env.NODE_ENV });
+    });
+  } catch (err: any) {
+    logger.error("Startup failed", { message: err?.message, stack: err?.stack });
+    process.exit(1);
+  }
 };
 
 const shutdown = (signal: string) => {

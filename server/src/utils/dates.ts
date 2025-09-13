@@ -70,3 +70,7 @@ export function enumerateBuckets(
   }
   return out;
 }
+
+export function toUtcMidnight(date: Date): Date {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
