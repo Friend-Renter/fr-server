@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { searchNearby } from "./service.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
@@ -21,6 +21,7 @@ const QuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
+// Mounted at /search → GET /search
 router.get(
   "/",
   asyncHandler(async (req, res) => {

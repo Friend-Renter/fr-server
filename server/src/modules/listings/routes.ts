@@ -1,6 +1,6 @@
 import { Router } from "express";
 import mongoose from "mongoose";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { Listing } from "./model.js";
 import { enumerateBuckets } from "../../utils/dates.js";
@@ -19,6 +19,7 @@ const Q = z.object({
   end: z.coerce.date(),
 });
 
+// Mounted at /listings → GET /listings/:id/availability
 router.get(
   "/:id/availability",
   asyncHandler(async (req, res) => {
@@ -37,7 +38,6 @@ router.get(
         .status(422)
         .json({ error: { code: "INVALID_WINDOW", message: "end must be after start" } });
     }
-    // Cap max window (e.g., 31 days worth of buckets)
     if (end.getTime() - start.getTime() > 31 * 24 * 3600 * 1000) {
       return res
         .status(422)
@@ -64,17 +64,15 @@ router.get(
     const category = asset?.category || "misc";
     const granularity = granularityFor(category);
 
-    const buckets = enumerateBuckets(start.getTime(), end.getTime(), granularity); // string[]
+    const buckets = enumerateBuckets(start.getTime(), end.getTime(), granularity);
     if (buckets.length === 0) return jsonOk(res, { granularity, buckets: [] });
 
-    // Locks present?
     const locked = await BookingLock.find(
       { listingId: new mongoose.Types.ObjectId(id), dateBucket: { $in: buckets } },
       { dateBucket: 1, _id: 0 }
     ).lean();
     const lockedSet = new Set(locked.map((d: any) => d.dateBucket));
 
-    // Blackouts filter
     const blockedByBlackout = (bucket: string) => {
       if (!Array.isArray(listing.blackouts) || listing.blackouts.length === 0) return false;
       const bStart =

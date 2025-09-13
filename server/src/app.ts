@@ -10,7 +10,7 @@ import { httpLogStream, logger } from "./config/logger.js";
 import { errorHandler } from "./middlewares/error.js";
 import { notFound } from "./middlewares/notFound.js";
 import { rateLimit } from "./middlewares/rateLimit.js";
-import { personaWebhook } from "./modules/verifications/http.js";
+import { personaWebhook } from "./modules/verifications/routes.js";
 import router from "./routes.js";
 import { requestId } from "./utils/ids.js";
 
