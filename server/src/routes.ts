@@ -9,6 +9,7 @@ import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
 import bookingsRouter from "./modules/bookings/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
+import mediaRouter from "./modules/media/routes.js";
 import quotesRouter from "./modules/quotes/routes.js";
 import searchRouter from "./modules/search/routes.js";
 import usersRouter from "./modules/users/routes.js";
@@ -20,6 +21,7 @@ export const router = Router();
 // Feature mounts
 router.use("/auth", authRouter);
 router.use("/bookings", bookingsRouter);
+router.use("/media", mediaRouter);
 router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search
 router.use("/quotes", quotesRouter); // POST /quotes/preview
@@ -55,3 +57,4 @@ router.get(
 );
 
 export default router;
+

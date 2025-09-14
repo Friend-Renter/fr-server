@@ -32,8 +32,16 @@ function writeSession(s: Session) {
   fs.writeFileSync(SESSION_FILE, JSON.stringify(s, null, 2));
 }
 
-async function http(method: string, path: string, body?: any, token?: string) {
-  const res = await fetch(`${BASE}${path}`, {
+function requireToken(as: Role): string {
+  const sess = readSession();
+  const token = sess[as]?.token;
+  if (!token)
+    throw new Error(`No session for role ${as}. Run: npm run cli -- login --email <e> --as ${as}`);
+  return token;
+}
+
+async function http(method: string, pathUrl: string, body?: any, token?: string) {
+  const res = await fetch(`${BASE}${pathUrl}`, {
     method,
     headers: {
       "Content-Type": "application/json",
@@ -93,19 +101,14 @@ async function cmdLogin() {
 
 async function cmdMe() {
   const as: Role = (arg("as") as Role) || "renter";
-  const sess = readSession();
-  const token = sess[as]?.token;
-  if (!token)
-    throw new Error(`No session for role ${as}. Run: npm run cli -- login --email <e> --as ${as}`);
+  const token = requireToken(as);
   const me = await http("GET", "/users/me", undefined, token);
   console.log(JSON.stringify(me, null, 2));
 }
 
 async function cmdAssetCreate() {
   const as: Role = (arg("as") as Role) || "host";
-  const sess = readSession();
-  const token = sess[as]?.token;
-  if (!token) throw new Error(`No session for role ${as}. Login first.`);
+  const token = requireToken(as);
   const category = arg("category", "car");
   const title = arg("title", "Civic LX");
   const description = arg("description", "Solid commuter");
@@ -143,15 +146,13 @@ async function cmdListingEnsure() {
 
   await mongoose.connect(process.env.MONGO_URI as string);
   const db = mongoose.connection.db!;
-  const existing = await db
-    .collection("listings")
-    .findOne(
-      {
-        assetId: new mongoose.Types.ObjectId(assetId!),
-        hostId: new mongoose.Types.ObjectId(host!),
-      },
-      { projection: { _id: 1 } }
-    );
+  const existing = await db.collection("listings").findOne(
+    {
+      assetId: new mongoose.Types.ObjectId(assetId!),
+      hostId: new mongoose.Types.ObjectId(host!),
+    },
+    { projection: { _id: 1 } }
+  );
   if (existing) {
     console.log(JSON.stringify({ id: existing._id.toString(), existed: true }, null, 2));
     await mongoose.disconnect();
@@ -183,9 +184,7 @@ async function cmdPreview() {
 
 async function cmdBook() {
   const as: Role = (arg("as") as Role) || "renter";
-  const sess = readSession();
-  const token = sess[as]?.token;
-  if (!token) throw new Error(`No session for role ${as}. Login first.`);
+  const token = requireToken(as);
   const listing = arg("listing");
   const start = arg("start");
   const end = arg("end");
@@ -197,10 +196,8 @@ async function cmdBook() {
 
 async function cmdBookingsList() {
   const as: Role = (arg("as") as Role) || "renter";
-  const state = arg("state"); // pending|accepted|declined|cancelled (your enum)
-  const sess = readSession();
-  const token = sess[as]?.token;
-  if (!token) throw new Error(`No session for role ${as}. Login first.`);
+  const state = arg("state"); // pending|accepted|declined|cancelled
+  const token = requireToken(as);
   const qp = state ? `?state=${encodeURIComponent(state)}` : "";
   const out = await http("GET", `/bookings${qp}`, undefined, token);
   console.log(JSON.stringify(out, null, 2));
@@ -208,9 +205,7 @@ async function cmdBookingsList() {
 
 async function cmdBookingsAccept() {
   const as: Role = (arg("as") as Role) || "host";
-  const sess = readSession();
-  const token = sess[as]?.token;
-  if (!token) throw new Error(`No session for role ${as}. Login first.`);
+  const token = requireToken(as);
   const id = arg("id");
   if (!isId24(id)) throw new Error("Missing/invalid --id (booking id)");
   const out = await http("POST", `/bookings/${id}/accept`, undefined, token);
@@ -227,6 +222,116 @@ async function cmdLocksClear() {
     .deleteMany({ listingId: new mongoose.Types.ObjectId(listing) });
   console.log(JSON.stringify({ deleted: r.deletedCount }, null, 2));
   await mongoose.disconnect();
+}
+
+/** ---------------------------
+ *  C5 Media commands (S3 PUT)
+ *  ---------------------------
+ */
+
+// media:sign --folder assets --type image/jpeg [--name foo.jpg] [--as host]
+async function cmdMediaSign() {
+  const folder = arg("folder", "assets")!;
+  const contentType = arg("type", "image/jpeg")!;
+  const pathHint = arg("name");
+  const as: Role = (arg("as") as Role) || "host"; // any auth'd user is allowed; default host
+  const token = requireToken(as);
+
+  const body: any = { folder, contentType };
+  if (pathHint) body.pathHint = pathHint;
+
+  const out = await http("POST", "/media/sign", body, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// media:upload --file ./local.jpg --uploadUrl "<SIGNED_URL>" [--type image/jpeg]
+async function cmdMediaUpload() {
+  const file = arg("file");
+  const uploadUrl = arg("uploadUrl");
+  const contentType = arg("type", "image/jpeg")!;
+  if (!file || !uploadUrl) throw new Error("--file and --uploadUrl required");
+
+  const buf = fs.readFileSync(path.resolve(file));
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: buf,
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Upload failed: ${res.status} ${res.statusText} ${txt}`);
+  }
+  console.log(JSON.stringify({ ok: true, uploaded: path.basename(file) }, null, 2));
+}
+
+// asset:attach --id <ASSET_ID> --url <PUBLIC_URL> [--label "front"] [--as host]
+async function cmdAssetAttach() {
+  const id = arg("id");
+  const url = arg("url");
+  const label = arg("label");
+  const as: Role = (arg("as") as Role) || "host";
+  const token = requireToken(as);
+
+  if (!isId24(id)) throw new Error("Missing/invalid --id (asset id)");
+  if (!url) throw new Error("Missing --url");
+  const addMedia = [label ? { url, label } : url];
+  const out = await http("PATCH", `/assets/${id}`, { addMedia }, token);
+  console.log(JSON.stringify(out, null, 2));
+  return out;
+}
+
+// asset:remove --id <ASSET_ID> --url <PUBLIC_URL> [--as host]
+async function cmdAssetRemove() {
+  const id = arg("id");
+  const url = arg("url");
+  const as: Role = (arg("as") as Role) || "host";
+  const token = requireToken(as);
+
+  if (!isId24(id)) throw new Error("Missing/invalid --id (asset id)");
+  if (!url) throw new Error("Missing --url");
+  const out = await http("PATCH", `/assets/${id}`, { removeMedia: [url] }, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// media:test --asset <ASSET_ID> --file ./local.jpg --folder assets --type image/jpeg [--label "front"] [--as host]
+async function cmdMediaTest() {
+  const assetId = arg("asset");
+  const file = arg("file");
+  const folder = arg("folder", "assets")!;
+  const contentType = arg("type", "image/jpeg")!;
+  const label = arg("label");
+  const as: Role = (arg("as") as Role) || "host";
+  const token = requireToken(as);
+
+  if (!isId24(assetId)) throw new Error("Missing/invalid --asset (asset id)");
+  if (!file) throw new Error("Missing --file");
+
+  // 1) Sign
+  const sign = await http(
+    "POST",
+    "/media/sign",
+    { folder, contentType, pathHint: path.basename(file) },
+    token
+  );
+  // 2) Upload
+  const buf = fs.readFileSync(path.resolve(file));
+  const putRes = await fetch(sign.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: buf,
+  });
+  if (!putRes.ok) {
+    const txt = await putRes.text().catch(() => "");
+    throw new Error(`Upload failed: ${putRes.status} ${putRes.statusText} ${txt}`);
+  }
+  // 3) Attach (use response of PATCH as the verification output)
+  const attached = await http(
+    "PATCH",
+    `/assets/${assetId}`,
+    { addMedia: [label ? { url: sign.publicUrl, label } : sign.publicUrl] },
+    token
+  );
+  console.log(JSON.stringify(attached, null, 2));
 }
 
 async function main() {
@@ -263,26 +368,54 @@ async function main() {
       case "locks:clear":
         await cmdLocksClear();
         break;
+
+      // C5 media
+      case "media:sign":
+        await cmdMediaSign();
+        break;
+      case "media:upload":
+        await cmdMediaUpload();
+        break;
+      case "asset:attach":
+        await cmdAssetAttach();
+        break;
+      case "asset:remove":
+        await cmdAssetRemove();
+        break;
+      case "media:test":
+        await cmdMediaTest();
+        break;
+
       default:
         console.log(
           `Usage (examples):
   npm run cli -- health
+
+  # auth
   npm run cli -- login --email ava5@example.com --as renter
   npm run cli -- login --email ava6@example.com --as host
   npm run cli -- me --as host
 
+  # inventory
   npm run cli -- asset:create --as host --category car --title "Civic LX" --lng -95.9345 --lat 41.2565
   npm run cli -- listing:ensure --asset <ASSET_ID>     # host id auto-detected from host session
 
-  # time format must be ISO UTC, e.g. 2025-09-15T05:00:00Z
+  # pricing / booking (times in ISO UTC, e.g. 2025-09-15T05:00:00Z)
   npm run cli -- preview --listing <LID> --start <ISO> --end <ISO>
-
   npm run cli -- book --as renter --listing <LID> --start <ISO> --end <ISO>
   npm run cli -- bookings:list --as renter --state pending
   npm run cli -- bookings:list --as host   --state pending
   npm run cli -- bookings:accept --as host --id <BID>
 
+  # locks
   npm run cli -- locks:clear --listing <LID>
+
+  # media (C5)
+  npm run cli -- media:sign --folder assets --type image/jpeg --name local.jpg --as host
+  npm run cli -- media:upload --file ./local.jpg --uploadUrl "<SIGNED_URL>" --type image/jpeg
+  npm run cli -- asset:attach --id <ASSET_ID> --url "<PUBLIC_URL>" --label "front" --as host
+  npm run cli -- asset:remove --id <ASSET_ID> --url "<PUBLIC_URL>" --as host
+  npm run cli -- media:test --asset <ASSET_ID> --file ./local.jpg --folder assets --type image/jpeg --label "front" --as host
 `
         );
     }
@@ -293,3 +426,4 @@ async function main() {
   }
 }
 main();
+

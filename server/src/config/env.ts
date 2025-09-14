@@ -36,6 +36,13 @@ const EnvSchema = z.object({
   PERSONA_ENV: z.string().default("sandbox"), // sandbox | production
   PERSONA_TEMPLATE_ID: z.string().optional().default(""),
   PERSONA_WEBHOOK_SECRET: z.string().optional().default(""),
+  // Media / S3
+  AWS_ACCESS_KEY_ID: z.string().optional().default(""),
+  AWS_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  S3_BUCKET: z.string().optional().default(""),
+  S3_REGION: z.string().default("us-east-1"),
+  CDN_DOMAIN: z.string().optional().default(""),
+  S3_KEY_PREFIX: z.string().optional().default("fr"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
