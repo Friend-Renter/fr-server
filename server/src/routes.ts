@@ -10,10 +10,12 @@ import authRouter from "./modules/auth/routes.js";
 import bookingsRouter from "./modules/bookings/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
 import mediaRouter from "./modules/media/routes.js";
+import paymentsRouter from "./modules/payments/routes.js";
 import quotesRouter from "./modules/quotes/routes.js";
 import searchRouter from "./modules/search/routes.js";
 import usersRouter from "./modules/users/routes.js";
-import { kycRouter, personaWebhook } from "./modules/verifications/routes.js";
+import { kycRouter } from "./modules/verifications/routes.js";
+import stripeWebhookRouter from "./modules/webhooks/stripe.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
 
 export const router = Router();
@@ -22,6 +24,7 @@ export const router = Router();
 router.use("/auth", authRouter);
 router.use("/bookings", bookingsRouter);
 router.use("/media", mediaRouter);
+router.use("/payments", paymentsRouter);
 router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search
 router.use("/quotes", quotesRouter); // POST /quotes/preview
@@ -31,7 +34,6 @@ router.use("/admin", adminRouter);
 
 // KYC
 router.use("/kyc", kycRouter);
-router.post("/webhooks/persona", personaWebhook);
 
 // Basic health (no deps)
 router.get(
@@ -56,5 +58,6 @@ router.get(
   })
 );
 
-export default router;
+export { stripeWebhookRouter };
 
+export default router;

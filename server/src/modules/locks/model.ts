@@ -13,7 +13,7 @@ export interface BookingLockDoc extends mongoose.Document {
   granularity: "hour" | "day"; // matches bucket type
   createdBy?: mongoose.Types.ObjectId; // userId who initiated (optional)
   reason?: string; // "quote" | "booking" | etc.
-
+  holdUntil?: Date; // when present, TTL auto-removes lock (used for PI holds)
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,6 +25,7 @@ const BookingLockSchema = new Schema<BookingLockDoc>(
     granularity: { type: String, enum: ["hour", "day"], required: true },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
     reason: { type: String },
+    holdUntil: { type: Date }, // TTL lock for PaymentIntent holds
   },
   { timestamps: true }
 );
@@ -34,6 +35,9 @@ BookingLockSchema.index({ listingId: 1, dateBucket: 1 }, { unique: true });
 
 /** Helpful for scanning locks across time */
 BookingLockSchema.index({ dateBucket: 1 });
+
+/** TTL index to auto-expire PI-held locks after ~30m (Mongo TTL runs ~minutely) */
+BookingLockSchema.index({ holdUntil: 1 }, { expireAfterSeconds: 0 });
 
 export const BookingLock: Model<BookingLockDoc> =
   mongoose.models.BookingLock || mongoose.model<BookingLockDoc>("BookingLock", BookingLockSchema);

@@ -95,12 +95,15 @@ export interface BookingDoc extends mongoose.Document {
   state: BookingState;
 
   locks?: Array<{ lockId: mongoose.Types.ObjectId; dateBucket: string }>;
+  // inside BookingSchema definition:
   paymentRefs?: {
     rentalIntentId?: string;
     depositIntentId?: string;
     chargeId?: string;
     transferId?: string;
   };
+
+  paymentStatus: "unpaid" | "requires_action" | "paid" | "refunded";
 
   checkin?: {
     at?: Date;
@@ -142,6 +145,12 @@ const BookingSchema = new Schema<BookingDoc>(
 
     locks: { type: [LockRefSchema], default: [] },
     paymentRefs: { type: PaymentRefsSchema, required: false },
+    paymentStatus: {
+      type: String,
+      enum: ["unpaid", "requires_action", "paid", "refunded"],
+      default: "unpaid",
+      index: true,
+    },
 
     checkin: { type: CheckpointSchema, required: false },
     checkout: { type: CheckpointSchema, required: false },
@@ -167,6 +176,8 @@ BookingSchema.index({ renterId: 1, state: 1, start: 1 });
 BookingSchema.index({ hostId: 1, state: 1, start: 1 });
 // For availability/calendar views
 BookingSchema.index({ listingId: 1, start: 1 });
+// after BookingSchema is defined:
+BookingSchema.index({ "paymentRefs.rentalIntentId": 1 }, { unique: true, sparse: true });
 
 export const Booking: Model<BookingDoc> =
   mongoose.models.Booking || mongoose.model<BookingDoc>("Booking", BookingSchema);
