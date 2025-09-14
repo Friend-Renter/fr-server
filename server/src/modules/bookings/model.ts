@@ -162,9 +162,11 @@ BookingSchema.pre("validate", function (next) {
 });
 
 /** Range + dashboards */
-BookingSchema.index({ listingId: 1, start: 1, end: 1 });
-BookingSchema.index({ hostId: 1, state: 1 });
-BookingSchema.index({ renterId: 1, state: 1 });
+// Efficient role/state queries
+BookingSchema.index({ renterId: 1, state: 1, start: 1 });
+BookingSchema.index({ hostId: 1, state: 1, start: 1 });
+// For availability/calendar views
+BookingSchema.index({ listingId: 1, start: 1 });
 
 export const Booking: Model<BookingDoc> =
   mongoose.models.Booking || mongoose.model<BookingDoc>("Booking", BookingSchema);

@@ -14,7 +14,9 @@
     "format:write": "prettier --write .",
     "test": "jest --passWithNoTests",
     "prepare": "husky",
-    "db:sync-indexes": "tsx scripts/sync-indexes.ts"
+    "db:sync-indexes": "tsx scripts/sync-indexes.ts",
+    "cli": "tsx scripts/cli.ts",
+    "test:health": "npm run cli -- health"
   },
   "keywords": [],
   "author": "",
