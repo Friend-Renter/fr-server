@@ -9,6 +9,7 @@ export type LockBucketsInput = {
   granularity: "hour" | "day";
   createdBy?: string; // userId
   reason?: string;
+  holdUntil?: Date; // set for PI-held locks (TTL)
   /**
    * When booking within a transaction later:
    *   pass the session so lock + booking can be atomic.
@@ -26,6 +27,7 @@ export async function lockBuckets(input: LockBucketsInput): Promise<BookingLockD
     granularity: input.granularity,
     createdBy: input.createdBy ? new mongoose.Types.ObjectId(input.createdBy) : undefined,
     reason: input.reason,
+    holdUntil: input.holdUntil,
   }));
 
   try {
@@ -71,4 +73,28 @@ export async function anyLocked(listingId: string, buckets: string[]): Promise<b
     dateBucket: { $in: buckets },
   }).exec();
   return count > 0;
+}
+
+/** Remove locks by an exact reason (e.g., "pi:<id>" or "booking:<id>"). */
+export async function unlockByReason(listingId: string, reason: string): Promise<number> {
+  await connectMongo();
+  const res = await BookingLock.deleteMany({
+    listingId: new mongoose.Types.ObjectId(listingId),
+    reason,
+  });
+  return res.deletedCount ?? 0;
+}
+
+/** Retag existing locks (e.g., from "pi:<piId>" to "booking:<bookingId>") and clear TTL. */
+export async function retagLocks(
+  listingId: string,
+  fromReason: string,
+  toReason: string
+): Promise<number> {
+  await connectMongo();
+  const res = await BookingLock.updateMany(
+    { listingId: new mongoose.Types.ObjectId(listingId), reason: fromReason },
+    { $set: { reason: toReason }, $unset: { holdUntil: "" } }
+  );
+  return res.modifiedCount ?? 0;
 }

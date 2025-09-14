@@ -43,6 +43,9 @@ const EnvSchema = z.object({
   S3_REGION: z.string().default("us-east-1"),
   CDN_DOMAIN: z.string().optional().default(""),
   S3_KEY_PREFIX: z.string().optional().default("fr"),
+
+  STRIPE_SECRET_KEY: z.string().min(1),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

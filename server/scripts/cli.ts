@@ -40,12 +40,19 @@ function requireToken(as: Role): string {
   return token;
 }
 
-async function http(method: string, pathUrl: string, body?: any, token?: string) {
+async function http(
+  method: string,
+  pathUrl: string,
+  body?: any,
+  token?: string,
+  extraHeaders?: Record<string, string>
+) {
   const res = await fetch(`${BASE}${pathUrl}`, {
     method,
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(extraHeaders || {}),
     },
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -60,6 +67,41 @@ async function http(method: string, pathUrl: string, body?: any, token?: string)
     const msg = json?.error?.message || `${res.status} ${res.statusText}`;
     const err: any = new Error(msg);
     err.status = res.status;
+    err.body = json;
+    throw err;
+  }
+  return json;
+}
+
+// Confirm a PaymentIntent against Stripe directly (test-only, for CLI)
+async function stripeConfirmPaymentIntent(piId: string, paymentMethod: string = "pm_card_visa") {
+  const sk = process.env.STRIPE_SECRET_KEY;
+  if (!sk) throw new Error("STRIPE_SECRET_KEY missing in environment");
+
+  const resp = await fetch(
+    `https://api.stripe.com/v1/payment_intents/${encodeURIComponent(piId)}/confirm`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Basic " + Buffer.from(`${sk}:`).toString("base64"),
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ payment_method: paymentMethod }),
+    }
+  );
+
+  const text = await resp.text();
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    json = { raw: text };
+  }
+
+  if (!resp.ok) {
+    const msg = json?.error?.message || `${resp.status} ${resp.statusText}`;
+    const err: any = new Error(`Stripe confirm failed: ${msg}`);
+    err.status = resp.status;
     err.body = json;
     throw err;
   }
@@ -334,6 +376,83 @@ async function cmdMediaTest() {
   console.log(JSON.stringify(attached, null, 2));
 }
 
+// payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO> [--idemp <KEY>]
+async function cmdPaymentsIntentCreate() {
+  const as: Role = (arg("as") as Role) || "renter";
+  if (as !== "renter") throw new Error("--as must be renter for payments");
+  const token = requireToken(as);
+
+  const listing = arg("listing");
+  const start = arg("start");
+  const end = arg("end");
+  const idemp = arg("idemp") || `cli-${Date.now()}`;
+  if (!isId24(listing)) throw new Error("Missing/invalid --listing (24 hex)");
+  if (!start || !end) throw new Error("Missing --start/--end (ISO)");
+
+  const out = await http("POST", "/payments/intents", { listingId: listing, start, end }, token, {
+    "X-Idempotency-Key": idemp,
+  });
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// payments:confirm --pi <PI_ID> [--pm pm_card_visa]
+async function cmdPaymentsConfirm() {
+  const pi = arg("pi");
+  const pm = arg("pm", "pm_card_visa");
+  if (!pi) throw new Error("Missing --pi <PAYMENT_INTENT_ID>");
+  const out = await stripeConfirmPaymentIntent(pi, pm);
+  console.log(
+    JSON.stringify({ id: out.id, status: out.status, latest_charge: out.latest_charge }, null, 2)
+  );
+}
+
+// bookings:create --as renter --pi <PI_ID>
+async function cmdBookingsCreateFromPI() {
+  const as: Role = (arg("as") as Role) || "renter";
+  if (as !== "renter") throw new Error("--as must be renter for bookings:create");
+  const token = requireToken(as);
+  const pi = arg("pi");
+  if (!pi) throw new Error("Missing --pi <PAYMENT_INTENT_ID>");
+  const out = await http("POST", "/bookings", { paymentIntentId: pi }, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// payments:status --pi <PI_ID>  OR  --booking <BID> [--as renter|host]
+async function cmdPaymentsStatus() {
+  const pi = arg("pi");
+  const bid = arg("booking");
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  if (!pi && !bid) throw new Error("Pass --pi <PAYMENT_INTENT_ID> or --booking <BOOKING_ID>");
+  const qs = pi
+    ? `paymentIntentId=${encodeURIComponent(pi)}`
+    : `bookingId=${encodeURIComponent(bid!)}`;
+  const out = await http("GET", `/payments/status?${qs}`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// bookings:decline --as host --id <BID>
+async function cmdBookingsDecline() {
+  const as: Role = (arg("as") as Role) || "host";
+  if (as !== "host") throw new Error("--as must be host for bookings:decline");
+  const token = requireToken(as);
+  const id = arg("id");
+  if (!isId24(id)) throw new Error("Missing/invalid --id (booking id)");
+  const out = await http("POST", `/bookings/${id}/decline`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// bookings:cancel --as renter --id <BID>
+async function cmdBookingsCancel() {
+  const as: Role = (arg("as") as Role) || "renter";
+  if (as !== "renter") throw new Error("--as must be renter for bookings:cancel");
+  const token = requireToken(as);
+  const id = arg("id");
+  if (!isId24(id)) throw new Error("Missing/invalid --id (booking id)");
+  const out = await http("POST", `/bookings/${id}/cancel`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
 async function main() {
   const cmd = process.argv[2];
   try {
@@ -357,8 +476,12 @@ async function main() {
         await cmdPreview();
         break;
       case "book":
-        await cmdBook();
-        break;
+        throw new Error(
+          "This command is deprecated in C6 (pay-first). Use:\n" +
+            "  npm run cli -- payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO>\n" +
+            "  npm run cli -- payments:confirm --pi <PI_ID>\n" +
+            "  npm run cli -- bookings:create --as renter --pi <PI_ID>\n"
+        );
       case "bookings:list":
         await cmdBookingsList();
         break;
@@ -386,6 +509,25 @@ async function main() {
         await cmdMediaTest();
         break;
 
+      case "payments:intent:create":
+        await cmdPaymentsIntentCreate();
+        break;
+      case "payments:confirm":
+        await cmdPaymentsConfirm();
+        break;
+      case "bookings:create":
+        await cmdBookingsCreateFromPI();
+        break;
+      case "payments:status":
+        await cmdPaymentsStatus();
+        break;
+      case "bookings:decline":
+        await cmdBookingsDecline();
+        break;
+      case "bookings:cancel":
+        await cmdBookingsCancel();
+        break;
+
       default:
         console.log(
           `Usage (examples):
@@ -400,14 +542,25 @@ async function main() {
   npm run cli -- asset:create --as host --category car --title "Civic LX" --lng -95.9345 --lat 41.2565
   npm run cli -- listing:ensure --asset <ASSET_ID>     # host id auto-detected from host session
 
-  # pricing / booking (times in ISO UTC, e.g. 2025-09-15T05:00:00Z)
+  # pricing / preview (times in ISO UTC, e.g. 2025-09-15T05:00:00Z)
   npm run cli -- preview --listing <LID> --start <ISO> --end <ISO>
-  npm run cli -- book --as renter --listing <LID> --start <ISO> --end <ISO>
+
+  # C6 pay-first flow
+  npm run cli -- payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO> [--idemp my-key]
+  npm run cli -- payments:confirm --pi <PI_ID> [--pm pm_card_visa]
+  npm run cli -- bookings:create --as renter --pi <PI_ID>
+  npm run cli -- payments:status --pi <PI_ID>
+  npm run cli -- payments:status --booking <BID> --as renter
+
+  # bookings (list/accept remain the same)
   npm run cli -- bookings:list --as renter --state pending
   npm run cli -- bookings:list --as host   --state pending
   npm run cli -- bookings:accept --as host --id <BID>
+  npm run cli -- bookings:decline --as host   --id <BID>
+npm run cli -- bookings:cancel  --as renter --id <BID>
 
-  # locks
+
+  # locks (admin/debug)
   npm run cli -- locks:clear --listing <LID>
 
   # media (C5)
@@ -426,4 +579,3 @@ async function main() {
   }
 }
 main();
-

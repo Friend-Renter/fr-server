@@ -1,11 +1,15 @@
 // src/modules/bookings/service.ts
+import crypto from "crypto";
+
 import mongoose from "mongoose";
 
+
 import { Booking, type BookingDoc } from "./model.js";
+import { stripe } from "../../lib/stripe.js";
 import { toUtcMidnight, enumerateBuckets } from "../../utils/dates.js";
 import { Listing } from "../listings/model.js";
 import { BookingLock } from "../locks/model.js";
-import { lockBuckets, unlockBuckets } from "../locks/service.js";
+import { lockBuckets, unlockBuckets, unlockByReason, retagLocks } from "../locks/service.js";
 
 type Granularity = "hour" | "day";
 const HOUR_CATS = new Set(["car", "boat", "jetski"]);
@@ -42,7 +46,7 @@ async function resolveGranularity(listing: any): Promise<Granularity> {
 }
 
 // Build buckets after we know the granularity
-async function buildBucketsAndGranularity(listing: any, start: Date, end: Date) {
+export async function buildBucketsAndGranularity(listing: any, start: Date, end: Date) {
   const category = await getCategory(listing);
   const granularity: Granularity = HOUR_CATS.has(category) ? "hour" : "day";
   const s = start.getTime();
@@ -51,7 +55,7 @@ async function buildBucketsAndGranularity(listing: any, start: Date, end: Date) 
   return { granularity, buckets };
 }
 
-function priceSnapshotByDays(listing: any, start: Date, end: Date) {
+export function priceSnapshotByDays(listing: any, start: Date, end: Date) {
   const p = listing?.pricing || {};
   const feeCents = p.feeCents ?? 0;
   const depositCents = p.depositCents ?? 0;
@@ -111,38 +115,74 @@ async function assertAvailable(
   }
 }
 
-/** Create booking (pending or confirmed if instantBook). Locks are acquired; on failure we roll back the booking. */
-export async function createBooking(args: {
-  renterId: string;
-  listingId: string;
-  start: Date;
-  end: Date;
-  // optional knobs for later (protection plan, promoCode, etc.)
-}) {
-  const { renterId, listingId, start, end } = args;
+/** Create booking from a **succeeded** Stripe PaymentIntent (pay-first). */
+export async function createBooking(args: { renterId: string; paymentIntentId: string }) {
+  const { renterId, paymentIntentId } = args;
+
+  // Load PI and validate
+  const pi = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["latest_charge"] });
+  if (!pi || pi.object !== "payment_intent")
+    throw Object.assign(new Error("Invalid paymentIntent"), { code: "INVALID_PI", status: 400 });
+  if (pi.status !== "succeeded")
+    throw Object.assign(new Error("Payment not completed"), {
+      code: "PI_NOT_SUCCEEDED",
+      status: 409,
+    });
+
+  const md: any = pi.metadata || {};
+  const listingId = String(md.listingId || "");
+  const startISO = String(md.startISO || "");
+  const endISO = String(md.endISO || "");
+  const snapshotTotalCents = Number(md.totalCents || 0);
 
   if (!mongoose.isValidObjectId(listingId)) {
-    throw Object.assign(new Error("Invalid listingId"), { code: "INVALID_ID" });
+    throw Object.assign(new Error("Invalid listingId in PI metadata"), { code: "INVALID_ID" });
+  }
+  const start = new Date(startISO);
+  const end = new Date(endISO);
+  if (
+    !(start instanceof Date) ||
+    isNaN(start.getTime()) ||
+    !(end instanceof Date) ||
+    isNaN(end.getTime())
+  ) {
+    throw Object.assign(new Error("Invalid dates in PI metadata"), { code: "INVALID_WINDOW" });
   }
   if (end <= start) {
     throw Object.assign(new Error("end must be after start"), { code: "INVALID_WINDOW" });
   }
-  // Limit absurdly large range (31d)
-  if (end.getTime() - start.getTime() > 31 * 24 * 3600 * 1000) {
-    throw Object.assign(new Error("range too large"), { code: "INVALID_WINDOW" });
+  if (String(md.renterId || "") !== renterId) {
+    throw Object.assign(new Error("Forbidden"), { code: "FORBIDDEN", status: 403 });
   }
 
+  // Load listing & recompute amount to defend against tampering
   const listing = await Listing.findById(listingId).lean();
   if (!listing || listing.status !== "active") {
     throw Object.assign(new Error("Listing not found"), { code: "LISTING_NOT_FOUND" });
   }
-
   const { granularity, buckets } = await buildBucketsAndGranularity(listing, start, end);
-  await assertAvailable(listing, start, end, granularity, buckets);
+  const { pricingSnapshot } = priceSnapshotByDays(listing, start, end);
 
-  const { nUnits, pricingSnapshot } = priceSnapshotByDays(listing, start, end);
+  if (pricingSnapshot.totalCents !== snapshotTotalCents || pi.amount !== snapshotTotalCents) {
+    throw Object.assign(new Error("Amount mismatch"), { code: "AMOUNT_MISMATCH", status: 409 });
+  }
 
-  // Create booking doc first to have an id for the lock reason.
+  // Verify PI locks exist for all buckets
+  const piReason = `pi:${pi.id}`;
+  const locks = await BookingLock.find({
+    listingId: listing._id,
+    reason: piReason,
+    dateBucket: { $in: buckets },
+  }).lean();
+  if (!locks || locks.length !== buckets.length) {
+    await unlockByReason(String(listing._id), piReason).catch(() => {});
+    throw Object.assign(new Error("Requested window is unavailable"), {
+      code: "UNAVAILABLE",
+      status: 409,
+    });
+  }
+
+  // Create booking; rely on unique index to prevent duplicates per PI
   const doc = await Booking.create({
     renterId: new mongoose.Types.ObjectId(renterId),
     hostId: listing.hostId,
@@ -153,25 +193,18 @@ export async function createBooking(args: {
     granularity,
     pricingSnapshot,
     state: listing.instantBook ? "accepted" : "pending",
+    paymentRefs: {
+      rentalIntentId: pi.id,
+      chargeId:
+        typeof pi.latest_charge === "string"
+          ? pi.latest_charge
+          : (pi.latest_charge?.id ?? undefined),
+    },
+    paymentStatus: "paid",
   } as Partial<BookingDoc>);
 
-  try {
-    await lockBuckets({
-      listingId: String(listing._id),
-      buckets,
-      granularity,
-      reason: `booking:${doc._id.toString()}`,
-    });
-  } catch (e: any) {
-    // On lock conflict, delete the just-created booking to avoid orphaned docs.
-    await Booking.deleteOne({ _id: doc._id }).catch(() => {});
-    if (e?.code === "LOCK_CONFLICT") {
-      const err: any = new Error("Requested window is unavailable");
-      err.code = "UNAVAILABLE";
-      throw err;
-    }
-    throw e;
-  }
+  // Retag locks from "pi:<id>" -> "booking:<bid>" and clear TTL
+  await retagLocks(String(listing._id), piReason, `booking:${doc._id.toString()}`);
 
   return doc;
 }
@@ -193,7 +226,7 @@ export async function acceptBooking(hostId: string, bookingId: string) {
   return b;
 }
 
-/** Host declines a pending booking → declined (unlock buckets). */
+/** Host declines a pending booking → declined (unlock + refund). */
 export async function declineBooking(hostId: string, bookingId: string) {
   if (!mongoose.isValidObjectId(bookingId)) {
     throw Object.assign(new Error("Invalid booking id"), { code: "INVALID_ID" });
@@ -206,13 +239,23 @@ export async function declineBooking(hostId: string, bookingId: string) {
     throw Object.assign(new Error("Invalid state"), { code: "INVALID_STATE", status: 409 });
 
   const buckets = buildBucketsFromBooking(b);
+
+  if (b.paymentStatus === "paid" && b.paymentRefs?.chargeId) {
+    try {
+      await stripe.refunds.create({ charge: b.paymentRefs.chargeId });
+      b.paymentStatus = "refunded";
+    } catch {
+      // log if you want
+    }
+  }
+
   await unlockBuckets(String(b.listingId), buckets);
   b.state = "declined";
   await b.save();
   return b;
 }
 
-/** Renter cancels a pending booking → cancelled (unlock buckets). */
+/** Renter cancels a pending booking → cancelled (unlock + refund). */
 export async function cancelPendingBooking(renterId: string, bookingId: string) {
   if (!mongoose.isValidObjectId(bookingId)) {
     throw Object.assign(new Error("Invalid booking id"), { code: "INVALID_ID" });
@@ -225,6 +268,16 @@ export async function cancelPendingBooking(renterId: string, bookingId: string) 
     throw Object.assign(new Error("Invalid state"), { code: "INVALID_STATE", status: 409 });
 
   const buckets = buildBucketsFromBooking(b);
+
+  if (b.paymentStatus === "paid" && b.paymentRefs?.chargeId) {
+    try {
+      await stripe.refunds.create({ charge: b.paymentRefs.chargeId });
+      b.paymentStatus = "refunded";
+    } catch {
+      // log if you want
+    }
+  }
+
   await unlockBuckets(String(b.listingId), buckets);
   b.state = "cancelled";
   await b.save();

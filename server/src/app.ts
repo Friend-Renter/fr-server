@@ -11,13 +11,15 @@ import { errorHandler } from "./middlewares/error.js";
 import { notFound } from "./middlewares/notFound.js";
 import { rateLimit } from "./middlewares/rateLimit.js";
 import { personaWebhook } from "./modules/verifications/routes.js";
-import router from "./routes.js";
+import router, { stripeWebhookRouter } from "./routes.js";
 import { requestId } from "./utils/ids.js";
 
 const app = express();
 
 // ✅ Only the webhook route gets raw body
 app.post("/webhooks/persona", express.raw({ type: "application/json" }), personaWebhook);
+// Stripe webhook must receive raw body for signature verification
+app.use("/webhooks", express.raw({ type: "application/json" }), stripeWebhookRouter);
 
 // security + parsing
 app.use(helmet());
