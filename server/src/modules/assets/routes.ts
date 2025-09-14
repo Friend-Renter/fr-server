@@ -10,7 +10,7 @@ const router = Router();
 
 /** Host: create an asset (location required) */
 router.post(
-  "/assets",
+  "/",
   requireAuth,
   requireRole("host"),
   asyncHandler(async (req, res) => {
@@ -18,11 +18,9 @@ router.post(
     const parsed = CreateAssetSchema.safeParse(req.body);
     if (!parsed.success) {
       const details = parsed.error.flatten();
-      return res
-        .status(422)
-        .json({
-          error: { code: "UNPROCESSABLE_ENTITY", message: "Invalid request body", details },
-        });
+      return res.status(422).json({
+        error: { code: "UNPROCESSABLE_ENTITY", message: "Invalid request body", details },
+      });
     }
     const input = CreateAssetSchema.parse(req.body) as CreateAssetInput;
     const { userId } = getAuth(req);

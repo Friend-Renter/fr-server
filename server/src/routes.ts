@@ -7,6 +7,7 @@ import { pingRedis } from "./config/redis.js";
 import adminRouter from "./modules/admin/routes.js";
 import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
+import bookingsRouter from "./modules/bookings/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
 import quotesRouter from "./modules/quotes/routes.js";
 import searchRouter from "./modules/search/routes.js";
@@ -18,11 +19,12 @@ export const router = Router();
 
 // Feature mounts
 router.use("/auth", authRouter);
-router.use("/", usersRouter); // e.g., GET /me
-router.use("/", assetsRouter); // defines /assets
+router.use("/bookings", bookingsRouter);
+router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search
 router.use("/quotes", quotesRouter); // POST /quotes/preview
 router.use("/listings", listingsRouter); // GET /listings/:id/availability
+router.use("/users", usersRouter); // e.g., GET /me
 router.use("/admin", adminRouter);
 
 // KYC
