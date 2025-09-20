@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 
+import { type BookingDoc } from "./model.js";
+import { checkIn, checkOut } from "./service.js";
 import {
   createBooking,
   listBookings,
@@ -8,8 +10,10 @@ import {
   declineBooking,
   cancelPendingBooking,
 } from "./service.js";
+import { key as rkey } from "../../config/redis.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
+import { getOrSetIdempotent } from "../../utils/idemptoency.js";
 
 const router = Router();
 
@@ -39,7 +43,9 @@ router.post(
 );
 
 const ListQuery = z.object({
-  state: z.enum(["pending", "accepted", "declined", "cancelled"]).optional(),
+  state: z
+    .enum(["pending", "accepted", "declined", "cancelled", "in_progress", "completed"])
+    .optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   role: z.enum(["renter", "host"]).optional(),
@@ -98,6 +104,101 @@ router.post(
     const { userId } = getAuth(req);
     const doc = await cancelPendingBooking(userId, id);
     jsonOk(res, { id: doc.id, state: doc.state });
+  })
+);
+
+function shapeCheckpoint(cp?: BookingDoc["checkin"]) {
+  if (!cp) return undefined;
+  return {
+    at: cp.at,
+    by: cp.by ? String(cp.by) : undefined,
+    notes: cp.notes,
+    readings: cp.readings,
+    photos: (cp.photos || []).map((p) => ({
+      url: p.url,
+      key: p.key,
+      label: (p as any).label, // optional
+    })),
+  };
+}
+
+// POST /bookings/:id/checkin
+router.post(
+  "/:id/checkin",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { id } = IdParam.parse(req.params);
+    const { userId } = getAuth(req);
+
+    const payload = {
+      photos: req.body?.photos,
+      notes: req.body?.notes,
+      readings: req.body?.readings,
+    };
+
+    const idempHeader = String(req.get("X-Idempotency-Key") || "").trim();
+    if (idempHeader) {
+      const cacheKey = rkey("idemp", "bookings", "checkin", id, idempHeader);
+      const { value } = await getOrSetIdempotent(cacheKey, 24 * 60 * 60, async () => {
+        const b = await checkIn(userId, id, payload);
+        return {
+          status: 200,
+          body: {
+            id: String(b._id),
+            state: b.state,
+            checkin: shapeCheckpoint(b.checkin),
+          },
+        };
+      });
+      return res.status(value.status).json(value.body);
+    }
+
+    const b = await checkIn(userId, id, payload);
+    return jsonOk(res, {
+      id: String(b._id),
+      state: b.state,
+      checkin: shapeCheckpoint(b.checkin),
+    });
+  })
+);
+
+// POST /bookings/:id/checkout
+router.post(
+  "/:id/checkout",
+  requireAuth,
+  asyncHandler(async (req, res) => {
+    const { id } = IdParam.parse(req.params);
+    const { userId } = getAuth(req);
+
+    const payload = {
+      photos: req.body?.photos,
+      notes: req.body?.notes,
+      readings: req.body?.readings,
+    };
+
+    const idempHeader = String(req.get("X-Idempotency-Key") || "").trim();
+    if (idempHeader) {
+      const cacheKey = rkey("idemp", "bookings", "checkout", id, idempHeader);
+      const { value } = await getOrSetIdempotent(cacheKey, 24 * 60 * 60, async () => {
+        const b = await checkOut(userId, id, payload);
+        return {
+          status: 200,
+          body: {
+            id: String(b._id),
+            state: b.state,
+            checkout: shapeCheckpoint(b.checkout),
+          },
+        };
+      });
+      return res.status(value.status).json(value.body);
+    }
+
+    const b = await checkOut(userId, id, payload);
+    return jsonOk(res, {
+      id: String(b._id),
+      state: b.state,
+      checkout: shapeCheckpoint(b.checkout),
+    });
   })
 );
 

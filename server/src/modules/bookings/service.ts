@@ -3,19 +3,193 @@ import crypto from "crypto";
 
 import mongoose from "mongoose";
 
-
 import { Booking, type BookingDoc } from "./model.js";
+import { logger } from "../../config/logger.js";
 import { stripe } from "../../lib/stripe.js";
 import { toUtcMidnight, enumerateBuckets } from "../../utils/dates.js";
+import { writeAudit } from "../audit/service.js";
 import { Listing } from "../listings/model.js";
 import { BookingLock } from "../locks/model.js";
-import { lockBuckets, unlockBuckets, unlockByReason, retagLocks } from "../locks/service.js";
+import { unlockBuckets, unlockByReason, retagLocks } from "../locks/service.js";
 
 type Granularity = "hour" | "day";
 const HOUR_CATS = new Set(["car", "boat", "jetski"]);
 
+// --- C7: types for check-in/out ---
+type ReadingInput = {
+  odometer?: number;
+  odometerUnit?: "mi" | "km";
+  fuelPercent?: number;
+  batteryPercent?: number;
+  hoursMeter?: number;
+  rangeEstimate?: number;
+  cleanliness?: "poor" | "fair" | "good" | "excellent";
+  extras?: Record<string, unknown>;
+  [k: string]: unknown; // allow future keys
+};
+
+type PhotoInput = { url: string; key?: string; label?: string };
+
+type CheckpointInput = {
+  photos?: PhotoInput[];
+  notes?: string;
+  readings?: ReadingInput;
+};
+
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && bStart < aEnd;
+}
+
+// --- C7: helpers ---
+const CDN_DOMAIN = process.env.CDN_DOMAIN;
+const S3_PUBLIC_HOST =
+  process.env.S3_PUBLIC_HOST || process.env.ASSETS_PUBLIC_HOST || process.env.S3_BUCKET_HOST;
+
+function isHttpOrHttps(u: string) {
+  try {
+    const parsed = new URL(u);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function photoUrlAllowed(u: string) {
+  try {
+    const parsed = new URL(u);
+    if (!(parsed.protocol === "http:" || parsed.protocol === "https:")) return false;
+    if (CDN_DOMAIN) return parsed.host === CDN_DOMAIN;
+    if (S3_PUBLIC_HOST) return parsed.host === S3_PUBLIC_HOST;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function logTransition(kind: "checkin" | "checkout", b: BookingDoc, actorId: string) {
+  logger.info(`booking.${kind}`, {
+    bookingId: String(b._id),
+    actorId,
+    state: b.state,
+    at: new Date().toISOString(),
+  });
+}
+
+function validateCheckpointInput(input: CheckpointInput) {
+  if (input.notes !== undefined) {
+    if (typeof input.notes !== "string") {
+      const e: any = new Error("notes must be a string.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (input.notes.length > 2000) {
+      const e: any = new Error("notes must be ≤ 2000 characters.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+  }
+
+  if (!input || (!input.photos && !input.notes && !input.readings)) {
+    const err: any = new Error("Provide at least one of photos|notes|readings.");
+    err.code = "INVALID_BODY";
+    err.status = 422;
+    throw err;
+  }
+
+  if (input.photos) {
+    if (!Array.isArray(input.photos)) {
+      const e: any = new Error("photos must be an array.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (input.photos.length > 20) {
+      const e: any = new Error("Maximum 20 photos per checkpoint.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    for (const p of input.photos) {
+      if (!p?.url || !isHttpOrHttps(p.url) || !photoUrlAllowed(p.url)) {
+        const e: any = new Error("Photo URL must be http/https and from an allowed host.");
+        e.code = "INVALID_BODY";
+        e.status = 422;
+        throw e;
+      }
+      if (p.key && typeof p.key !== "string") {
+        const e: any = new Error("Photo key must be a string when provided.");
+        e.code = "INVALID_BODY";
+        e.status = 422;
+        throw e;
+      }
+      if (p.label && typeof p.label !== "string") {
+        const e: any = new Error("Photo label must be a string when provided.");
+        e.code = "INVALID_BODY";
+        e.status = 422;
+        throw e;
+      }
+    }
+  }
+
+  const r = input.readings;
+  if (r) {
+    const num = (v: unknown) => (typeof v === "number" && !Number.isNaN(v) ? v : undefined);
+
+    if (r.odometer !== undefined && (num(r.odometer) ?? -1) < 0) {
+      const e: any = new Error("odometer must be >= 0.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (r.odometerUnit && r.odometerUnit !== "mi" && r.odometerUnit !== "km") {
+      const e: any = new Error('odometerUnit must be "mi" or "km".');
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (r.fuelPercent !== undefined) {
+      const v = num(r.fuelPercent);
+      if (v === undefined || v < 0 || v > 100) {
+        const e: any = new Error("fuelPercent must be between 0 and 100.");
+        e.code = "INVALID_BODY";
+        e.status = 422;
+        throw e;
+      }
+    }
+    if (r.batteryPercent !== undefined) {
+      const v = num(r.batteryPercent);
+      if (v === undefined || v < 0 || v > 100) {
+        const e: any = new Error("batteryPercent must be between 0 and 100.");
+        e.code = "INVALID_BODY";
+        e.status = 422;
+        throw e;
+      }
+    }
+    if (r.hoursMeter !== undefined && (num(r.hoursMeter) ?? -1) < 0) {
+      const e: any = new Error("hoursMeter must be >= 0.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (r.rangeEstimate !== undefined && (num(r.rangeEstimate) ?? -1) < 0) {
+      const e: any = new Error("rangeEstimate must be >= 0.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+    if (r.cleanliness && !["poor", "fair", "good", "excellent"].includes(String(r.cleanliness))) {
+      const e: any = new Error("cleanliness must be one of poor|fair|good|excellent.");
+      e.code = "INVALID_BODY";
+      e.status = 422;
+      throw e;
+    }
+  }
+}
+
+function isParticipant(b: BookingDoc, actorId: string) {
+  return String(b.hostId) === actorId || String(b.renterId) === actorId;
 }
 
 function buildBucketsFromBooking(b: BookingDoc): string[] {
@@ -30,19 +204,6 @@ async function getCategory(listing: any): Promise<string> {
     .collection("assets")
     .findOne({ _id: listing.assetId }, { projection: { category: 1 } });
   return asset?.category || "misc";
-}
-
-// Decide granularity using pricing OR asset category
-async function resolveGranularity(listing: any): Promise<Granularity> {
-  if (listing?.pricing?.baseHourlyCents) return "hour";
-
-  // fetch asset category to infer hourly categories
-  if (!mongoose.connection.db) throw new Error("DB not ready");
-  const asset = await mongoose.connection.db
-    .collection("assets")
-    .findOne({ _id: listing.assetId }, { projection: { category: 1 } });
-
-  return HOUR_CATS.has(asset?.category) ? "hour" : "day";
 }
 
 // Build buckets after we know the granularity
@@ -282,6 +443,174 @@ export async function cancelPendingBooking(renterId: string, bookingId: string) 
   b.state = "cancelled";
   await b.save();
   return b;
+}
+
+// --- C7: Check-in ---
+export async function checkIn(actorId: string, bookingId: string, input: CheckpointInput) {
+  if (!mongoose.isValidObjectId(bookingId)) {
+    throw Object.assign(new Error("Invalid booking id"), { code: "INVALID_ID" });
+  }
+  validateCheckpointInput(input);
+
+  const b = await Booking.findById(bookingId);
+  if (!b) throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  if (!isParticipant(b, actorId)) {
+    throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  }
+  if (b.checkin?.at) return b; // idempotent
+
+  if (b.state !== "accepted") {
+    throw Object.assign(new Error("Check-in allowed only when accepted."), {
+      code: "INVALID_STATE",
+      status: 409,
+    });
+  }
+  if (b.paymentStatus !== "paid") {
+    throw Object.assign(new Error("Check-in requires a paid booking."), {
+      code: "INVALID_STATE",
+      status: 409,
+    });
+  }
+
+  const now = Date.now();
+  const start = new Date(b.start).getTime();
+  const end = new Date(b.end).getTime(); // inclusive
+  if (!(now >= start && now <= end)) {
+    throw Object.assign(new Error("Check-in allowed from start through end (inclusive)."), {
+      code: "INVALID_WINDOW",
+      status: 422,
+    });
+  }
+
+  const update = {
+    $set: {
+      state: "in_progress",
+      checkin: {
+        by: new mongoose.Types.ObjectId(actorId),
+        at: new Date(),
+        photos: input.photos ?? [],
+        notes: input.notes,
+        readings: input.readings,
+      },
+      updatedAt: new Date(),
+    },
+  };
+
+  const updated =
+    (await Booking.findOneAndUpdate(
+      {
+        _id: new mongoose.Types.ObjectId(bookingId),
+        state: "accepted",
+        "checkin.at": { $exists: false },
+      },
+      update,
+      { new: true }
+    )) || (await Booking.findById(bookingId));
+
+  if (!updated) throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  if (!isParticipant(updated, actorId)) {
+    throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  }
+
+  // best-effort audit
+  void writeAudit({
+    actorId: new mongoose.Types.ObjectId(actorId),
+    action: "booking.checkin",
+    target: { type: "user", id: updated.renterId },
+    diff: {
+      bookingId: updated._id,
+      stateFrom: "accepted",
+      stateTo: updated.state,
+      checkinAt: updated.checkin?.at,
+    },
+  } as any);
+
+  logTransition("checkin", updated, actorId);
+  return updated;
+}
+
+// --- C7: Check-out ---
+export async function checkOut(actorId: string, bookingId: string, input: CheckpointInput) {
+  if (!mongoose.isValidObjectId(bookingId)) {
+    throw Object.assign(new Error("Invalid booking id"), { code: "INVALID_ID" });
+  }
+  validateCheckpointInput(input);
+
+  const b = await Booking.findById(bookingId);
+  if (!b) throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  if (!isParticipant(b, actorId)) {
+    throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  }
+  if (b.checkout?.at) return b; // idempotent
+
+  if (b.state !== "in_progress") {
+    throw Object.assign(new Error("Check-out allowed only when in_progress."), {
+      code: "INVALID_STATE",
+      status: 409,
+    });
+  }
+  if (!b.checkin?.at) {
+    throw Object.assign(new Error("Check-out not allowed before check-in."), {
+      code: "INVALID_STATE",
+      status: 409,
+    });
+  }
+
+  const now = Date.now();
+  const windowStart = new Date(b.checkin.at).getTime();
+  const windowEnd = new Date(b.end).getTime() + 12 * 60 * 60 * 1000; // +12h
+  if (!(now >= windowStart && now <= windowEnd)) {
+    throw Object.assign(
+      new Error("Check-out allowed from check-in time through end + 12h (inclusive)."),
+      { code: "INVALID_WINDOW", status: 422 }
+    );
+  }
+
+  const update = {
+    $set: {
+      state: "completed",
+      checkout: {
+        by: new mongoose.Types.ObjectId(actorId),
+        at: new Date(),
+        photos: input.photos ?? [],
+        notes: input.notes,
+        readings: input.readings,
+      },
+      updatedAt: new Date(),
+    },
+  };
+
+  const updated =
+    (await Booking.findOneAndUpdate(
+      {
+        _id: new mongoose.Types.ObjectId(bookingId),
+        state: "in_progress",
+        "checkout.at": { $exists: false },
+      },
+      update,
+      { new: true }
+    )) || (await Booking.findById(bookingId));
+
+  if (!updated) throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  if (!isParticipant(updated, actorId)) {
+    throw Object.assign(new Error("Not found"), { code: "NOT_FOUND", status: 404 });
+  }
+
+  // best-effort audit
+  void writeAudit({
+    actorId: new mongoose.Types.ObjectId(actorId),
+    action: "booking.checkout",
+    target: { type: "user", id: updated.renterId },
+    diff: {
+      bookingId: updated._id,
+      stateFrom: "in_progress",
+      stateTo: updated.state,
+      checkoutAt: updated.checkout?.at,
+    },
+  } as any);
+
+  logTransition("checkout", updated, actorId);
+  return updated;
 }
 
 /** List bookings by role/state with simple pagination */
