@@ -44,12 +44,28 @@ const PhotoSchema = new Schema(
   { _id: false }
 );
 
+/** Typed-but-flexible readings (strict:false keeps extra keys). */
+const ReadingsSchema = new Schema(
+  {
+    odometer: { type: Number, min: 0 },
+    odometerUnit: { type: String, enum: ["mi", "km"] },
+    fuelPercent: { type: Number, min: 0, max: 100 },
+    batteryPercent: { type: Number, min: 0, max: 100 },
+    hoursMeter: { type: Number, min: 0 },
+    rangeEstimate: { type: Number, min: 0 },
+    cleanliness: { type: String, enum: ["poor", "fair", "good", "excellent"] },
+    extras: { type: Schema.Types.Mixed },
+  },
+  { _id: false, strict: false }
+);
+
 const CheckpointSchema = new Schema(
   {
+    by: { type: Schema.Types.ObjectId, ref: "User" },
     at: { type: Date },
     photos: { type: [PhotoSchema], default: [] },
-    notes: { type: String },
-    readings: { type: Schema.Types.Mixed }, // e.g., odometer, fuel, etc.
+    notes: { type: String, maxlength: 2000 },
+    readings: { type: ReadingsSchema }, // typed but allows extra keys
   },
   { _id: false }
 );
@@ -106,17 +122,39 @@ export interface BookingDoc extends mongoose.Document {
   paymentStatus: "unpaid" | "requires_action" | "paid" | "refunded";
 
   checkin?: {
+    by?: mongoose.Types.ObjectId;
     at?: Date;
-    photos?: Array<{ url: string; key?: string }>;
+    photos?: Array<{ url: string; key?: string; label?: string }>;
     notes?: string;
-    readings?: Record<string, unknown>;
+    readings?: {
+      odometer?: number;
+      odometerUnit?: "mi" | "km";
+      fuelPercent?: number;
+      batteryPercent?: number;
+      hoursMeter?: number;
+      rangeEstimate?: number;
+      cleanliness?: "poor" | "fair" | "good" | "excellent";
+      extras?: Record<string, unknown>;
+      [k: string]: unknown;
+    };
   };
 
   checkout?: {
+    by?: mongoose.Types.ObjectId;
     at?: Date;
-    photos?: Array<{ url: string; key?: string }>;
+    photos?: Array<{ url: string; key?: string; label?: string }>;
     notes?: string;
-    readings?: Record<string, unknown>;
+    readings?: {
+      odometer?: number;
+      odometerUnit?: "mi" | "km";
+      fuelPercent?: number;
+      batteryPercent?: number;
+      hoursMeter?: number;
+      rangeEstimate?: number;
+      cleanliness?: "poor" | "fair" | "good" | "excellent";
+      extras?: Record<string, unknown>;
+      [k: string]: unknown;
+    };
   };
 
   createdAt: Date;

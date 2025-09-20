@@ -121,6 +121,45 @@ function isId24(v?: string) {
   return !!v && /^[0-9a-fA-F]{24}$/.test(v);
 }
 
+// gather repeated flags like: --photo URL --photo URL2
+function multiArgs(name: string): string[] | undefined {
+  const out: string[] = [];
+  for (let i = 3; i < process.argv.length; i++) {
+    if (
+      process.argv[i] === `--${name}` &&
+      process.argv[i + 1] &&
+      !process.argv[i + 1].startsWith("--")
+    ) {
+      out.push(process.argv[i + 1]);
+      i++;
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+function parseReadingsCsv(csv?: string): Record<string, unknown> | undefined {
+  if (!csv) return undefined;
+  const r: Record<string, unknown> = {};
+  for (const pair of csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    const [k, vRaw] = pair.split("=").map((s) => s.trim());
+    if (!k) continue;
+    const asNum = Number(vRaw);
+    const isNum = vRaw !== "" && !Number.isNaN(asNum) && /^[+-]?\d+(\.\d+)?$/.test(vRaw);
+    r[k] = isNum ? asNum : vRaw;
+  }
+  return r;
+}
+
+function photosFromFlags(): Array<{ url: string }> | undefined {
+  const many = multiArgs("photo");
+  const single = arg("photo");
+  const urls = many ?? (single ? [single] : undefined);
+  return urls?.map((url) => ({ url }));
+}
+
 async function cmdHealth() {
   const a = await http("GET", "/health");
   console.log(JSON.stringify(a, null, 2));
@@ -264,6 +303,44 @@ async function cmdLocksClear() {
     .deleteMany({ listingId: new mongoose.Types.ObjectId(listing) });
   console.log(JSON.stringify({ deleted: r.deletedCount }, null, 2));
   await mongoose.disconnect();
+}
+
+// bookings:checkin --as renter|host --id <BID> [--photo URL ...] [--notes "..."] [--readings "odometer=41235,odometerUnit=mi,fuelPercent=85"] [--idemp KEY]
+async function cmdBookingsCheckin() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const id = arg("id");
+  if (!isId24(id)) throw new Error("Missing/invalid --id (booking id)");
+
+  const body: any = {
+    photos: photosFromFlags(),
+    notes: arg("notes"),
+    readings: parseReadingsCsv(arg("readings")),
+  };
+  const idemp = arg("idemp");
+  const headers = idemp ? { "X-Idempotency-Key": idemp } : undefined;
+
+  const out = await http("POST", `/bookings/${id}/checkin`, body, token, headers);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// bookings:checkout --as renter|host --id <BID> [--photo URL ...] [--notes "..."] [--readings "..."] [--idemp KEY]
+async function cmdBookingsCheckout() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const id = arg("id");
+  if (!isId24(id)) throw new Error("Missing/invalid --id (booking id)");
+
+  const body: any = {
+    photos: photosFromFlags(),
+    notes: arg("notes"),
+    readings: parseReadingsCsv(arg("readings")),
+  };
+  const idemp = arg("idemp");
+  const headers = idemp ? { "X-Idempotency-Key": idemp } : undefined;
+
+  const out = await http("POST", `/bookings/${id}/checkout`, body, token, headers);
+  console.log(JSON.stringify(out, null, 2));
 }
 
 /** ---------------------------
@@ -491,6 +568,12 @@ async function main() {
       case "locks:clear":
         await cmdLocksClear();
         break;
+      case "bookings:checkin":
+        await cmdBookingsCheckin();
+        break;
+      case "bookings:checkout":
+        await cmdBookingsCheckout();
+        break;
 
       // C5 media
       case "media:sign":
@@ -558,6 +641,9 @@ async function main() {
   npm run cli -- bookings:accept --as host --id <BID>
   npm run cli -- bookings:decline --as host   --id <BID>
 npm run cli -- bookings:cancel  --as renter --id <BID>
+  npm run cli -- bookings:checkin --as host --id <BID> --notes "Scratch LF" --readings "odometer=41235,odometerUnit=mi,fuelPercent=85" --photo https://cdn.example.com/fr/abc/front.jpg
+  npm run cli -- bookings:checkout --as renter --id <BID> --notes "All good" --readings "odometer=41245,odometerUnit=mi,fuelPercent=60"
+
 
 
   # locks (admin/debug)
