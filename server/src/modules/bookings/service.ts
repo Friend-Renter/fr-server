@@ -11,6 +11,7 @@ import { writeAudit } from "../audit/service.js";
 import { Listing } from "../listings/model.js";
 import { BookingLock } from "../locks/model.js";
 import { unlockBuckets, unlockByReason, retagLocks } from "../locks/service.js";
+import { computeQuote } from "../pricing/calc.js"; // <-- C8
 
 type Granularity = "hour" | "day";
 const HOUR_CATS = new Set(["car", "boat", "jetski"]);
@@ -280,80 +281,86 @@ async function assertAvailable(
 export async function createBooking(args: { renterId: string; paymentIntentId: string }) {
   const { renterId, paymentIntentId } = args;
 
-  // Load PI and validate
   const pi = await stripe.paymentIntents.retrieve(paymentIntentId, { expand: ["latest_charge"] });
-  if (!pi || pi.object !== "payment_intent")
+  if (!pi || pi.object !== "payment_intent") {
     throw Object.assign(new Error("Invalid paymentIntent"), { code: "INVALID_PI", status: 400 });
-  if (pi.status !== "succeeded")
+  }
+  if (pi.status !== "succeeded") {
     throw Object.assign(new Error("Payment not completed"), {
       code: "PI_NOT_SUCCEEDED",
       status: 409,
     });
+  }
 
   const md: any = pi.metadata || {};
   const listingId = String(md.listingId || "");
   const startISO = String(md.startISO || "");
   const endISO = String(md.endISO || "");
   const snapshotTotalCents = Number(md.totalCents || 0);
+  const promoCode = (md.promoCode ? String(md.promoCode) : null) as string | null;
 
   if (!mongoose.isValidObjectId(listingId)) {
     throw Object.assign(new Error("Invalid listingId in PI metadata"), { code: "INVALID_ID" });
   }
   const start = new Date(startISO);
   const end = new Date(endISO);
-  if (
-    !(start instanceof Date) ||
-    isNaN(start.getTime()) ||
-    !(end instanceof Date) ||
-    isNaN(end.getTime())
-  ) {
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || end <= start) {
     throw Object.assign(new Error("Invalid dates in PI metadata"), { code: "INVALID_WINDOW" });
-  }
-  if (end <= start) {
-    throw Object.assign(new Error("end must be after start"), { code: "INVALID_WINDOW" });
   }
   if (String(md.renterId || "") !== renterId) {
     throw Object.assign(new Error("Forbidden"), { code: "FORBIDDEN", status: 403 });
   }
 
-  // Load listing & recompute amount to defend against tampering
-  const listing = await Listing.findById(listingId).lean();
-  if (!listing || listing.status !== "active") {
+  // Load listing twice: lean for availability, doc for calc typing
+  const listingLean = await Listing.findById(listingId).lean();
+  if (!listingLean || listingLean.status !== "active") {
     throw Object.assign(new Error("Listing not found"), { code: "LISTING_NOT_FOUND" });
   }
-  const { granularity, buckets } = await buildBucketsAndGranularity(listing, start, end);
-  const { pricingSnapshot } = priceSnapshotByDays(listing, start, end);
+  const { granularity, buckets } = await buildBucketsAndGranularity(listingLean, start, end);
 
-  if (pricingSnapshot.totalCents !== snapshotTotalCents || pi.amount !== snapshotTotalCents) {
+  const listingDoc = await Listing.findById(listingId); // doc for calc (has getters/types)
+  const quote = await computeQuote({ listing: listingDoc as any, start, end, promoCode });
+
+  if (quote.totalCents !== snapshotTotalCents || pi.amount !== snapshotTotalCents) {
     throw Object.assign(new Error("Amount mismatch"), { code: "AMOUNT_MISMATCH", status: 409 });
   }
 
   // Verify PI locks exist for all buckets
   const piReason = `pi:${pi.id}`;
   const locks = await BookingLock.find({
-    listingId: listing._id,
+    listingId: listingLean._id,
     reason: piReason,
     dateBucket: { $in: buckets },
   }).lean();
   if (!locks || locks.length !== buckets.length) {
-    await unlockByReason(String(listing._id), piReason).catch(() => {});
+    await unlockByReason(String(listingLean._id), piReason).catch(() => {});
     throw Object.assign(new Error("Requested window is unavailable"), {
       code: "UNAVAILABLE",
       status: 409,
     });
   }
 
-  // Create booking; rely on unique index to prevent duplicates per PI
+  // Use real ObjectIds — do NOT pass FlattenMaps from lean docs
   const doc = await Booking.create({
     renterId: new mongoose.Types.ObjectId(renterId),
-    hostId: listing.hostId,
-    listingId: listing._id,
-    assetId: listing.assetId,
+    hostId: listingLean.hostId as mongoose.Types.ObjectId,
+    listingId: new mongoose.Types.ObjectId(listingId),
+    assetId: new mongoose.Types.ObjectId(String(listingLean.assetId)),
     start,
     end,
     granularity,
-    pricingSnapshot,
-    state: listing.instantBook ? "accepted" : "pending",
+    pricingSnapshot: {
+      currency: quote.currency,
+      totalCents: quote.totalCents,
+      baseCents: quote.baseCents,
+      feeCents: quote.feeCents,
+      discountCents: quote.discountCents,
+      taxCents: quote.taxCents,
+      depositCents: quote.depositCents,
+      promoCode,
+      lineItems: quote.lineItems,
+    },
+    state: (listingLean as any).instantBook ? "accepted" : "pending",
     paymentRefs: {
       rentalIntentId: pi.id,
       chargeId:
@@ -362,11 +369,9 @@ export async function createBooking(args: { renterId: string; paymentIntentId: s
           : (pi.latest_charge?.id ?? undefined),
     },
     paymentStatus: "paid",
-  } as Partial<BookingDoc>);
+  });
 
-  // Retag locks from "pi:<id>" -> "booking:<bid>" and clear TTL
-  await retagLocks(String(listing._id), piReason, `booking:${doc._id.toString()}`);
-
+  await retagLocks(String(listingLean._id), piReason, `booking:${doc._id.toString()}`);
   return doc;
 }
 
