@@ -17,6 +17,7 @@
     "db:sync-indexes": "tsx scripts/sync-indexes.ts",
     "cli": "tsx scripts/cli.ts",
     "c7": "tsx scripts/c7.ts",
+    "backfill": "tsx scripts/backfill/listing_point_from_asset.ts",
     "test:health": "npm run cli -- health"
   },
   "keywords": [],

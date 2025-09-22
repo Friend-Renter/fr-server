@@ -3,13 +3,15 @@ import crypto from "crypto";
 import { Router } from "express";
 import { z } from "zod";
 
+import { getEnvPromos } from "../../config/env.js";
 import { key, redisClient } from "../../config/redis.js";
 import { stripe } from "../../lib/stripe.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
-import { buildBucketsAndGranularity, priceSnapshotByDays } from "../bookings/service.js";
+import { buildBucketsAndGranularity } from "../bookings/service.js";
 import { Listing } from "../listings/model.js";
 import { lockBuckets } from "../locks/service.js";
+import { computeQuote } from "../pricing/calc.js";
 
 const router = Router();
 
@@ -17,6 +19,7 @@ const IntentSchema = z.object({
   listingId: z.string().length(24),
   start: z.coerce.date(),
   end: z.coerce.date(),
+  promoCode: z.string().trim().min(1).optional(),
 });
 
 router.post(
@@ -25,33 +28,51 @@ router.post(
   requireRole("renter"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
-    const { listingId, start, end } = IntentSchema.parse(req.body);
+    const { listingId, start, end, promoCode } = IntentSchema.parse(req.body);
 
-    const listing = await Listing.findById(listingId).lean();
-    if (!listing || listing.status !== "active") {
+    // ---- C8: promo validation (explicit error) ----
+    if (promoCode) {
+      const promo = getEnvPromos().find((p) => p.code === promoCode.trim().toUpperCase());
+      if (!promo) {
+        return res.status(422).json({ error: { code: "INVALID_PROMO", message: "Unknown promo" } });
+      }
+    }
+
+    // Load listing (lean for availability + doc for calc)
+    const listingLean = await Listing.findById(listingId).lean();
+    if (!listingLean || listingLean.status !== "active") {
       return res.status(404).json({ error: { code: "LISTING_NOT_FOUND" } });
     }
 
-    const { granularity, buckets } = await buildBucketsAndGranularity(listing, start, end);
+    // Build buckets and ensure a non-empty window
+    const { granularity, buckets } = await buildBucketsAndGranularity(listingLean, start, end);
     if (!buckets.length) {
       return res.status(422).json({ error: { code: "INVALID_WINDOW", message: "Empty window" } });
     }
-    const { pricingSnapshot } = priceSnapshotByDays(listing, start, end);
-    if (pricingSnapshot.totalCents <= 0) {
+
+    // Compute authoritative pricing via C8 calculator (tax, fee, promo)
+    const listingDoc = await Listing.findById(listingId);
+    if (!listingDoc) {
+      return res.status(404).json({ error: { code: "LISTING_NOT_FOUND" } });
+    }
+    const q = await computeQuote({ listing: listingDoc as any, start, end, promoCode });
+
+    if (q.totalCents <= 0) {
       return res.status(422).json({ error: { code: "NO_PRICING" } });
     }
 
+    // Idempotency (include pricing + promo so repeated calls dedupe correctly)
     const idempHeader = String(req.header("X-Idempotency-Key") || "");
-    const derived = `pi:rental:${userId}:${listingId}:${start.toISOString()}:${end.toISOString()}:${pricingSnapshot.totalCents}`;
+    const derived = `pi:rental:${userId}:${listingId}:${start.toISOString()}:${end.toISOString()}:${q.totalCents}:${promoCode ?? ""}`;
     const hash = crypto
       .createHash("sha1")
       .update(idempHeader || derived)
       .digest("hex");
     const cacheKey = key("pi", "intent", hash);
+
     const r = redisClient();
     if (!r.isOpen) await r.connect();
     const cached = await r.get(cacheKey);
-
     if (cached) {
       const existing = await stripe.paymentIntents.retrieve(cached).catch(() => null);
       if (
@@ -63,29 +84,34 @@ router.post(
         return jsonOk(res, {
           paymentIntentId: existing.id,
           clientSecret: existing.client_secret,
+          // optional niceties for client display:
+          amount: q.totalCents,
+          currency: q.currency,
+          lineItems: q.lineItems,
+          taxCents: q.taxCents,
+          discountCents: q.discountCents,
         });
       }
     }
 
     const pi = await stripe.paymentIntents.create(
       {
-        amount: pricingSnapshot.totalCents,
-        currency: "usd",
-        automatic_payment_methods: {
-          enabled: true,
-          allow_redirects: "never", // ⬅️ add this line
-        },
+        amount: q.totalCents,
+        currency: q.currency || "usd",
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
         metadata: {
           renterId: userId,
           listingId,
           startISO: start.toISOString(),
           endISO: end.toISOString(),
-          totalCents: String(pricingSnapshot.totalCents),
+          totalCents: String(q.totalCents),
+          promoCode: promoCode ?? "",
         },
       },
       { idempotencyKey: idempHeader || derived }
     );
 
+    // Try to hold the buckets for 30 minutes tied to this PI
     try {
       const holdUntil = new Date(Date.now() + 30 * 60 * 1000);
       await lockBuckets({
@@ -107,7 +133,16 @@ router.post(
 
     await r.set(cacheKey, pi.id, { NX: true, EX: 60 * 30 });
 
-    return jsonOk(res, { paymentIntentId: pi.id, clientSecret: pi.client_secret });
+    return jsonOk(res, {
+      paymentIntentId: pi.id,
+      clientSecret: pi.client_secret,
+      // optional niceties for client display:
+      amount: q.totalCents,
+      currency: q.currency,
+      lineItems: q.lineItems,
+      taxCents: q.taxCents,
+      discountCents: q.discountCents,
+    });
   })
 );
 

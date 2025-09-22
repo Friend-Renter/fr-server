@@ -253,13 +253,35 @@ async function cmdListingEnsure() {
   await mongoose.disconnect();
 }
 
+async function cmdListingSetState() {
+  const id = arg("id");
+  const state = arg("state");
+  if (!isId24(id) || !state) throw new Error("Usage: listing:set-state --id <LID> --state TX");
+  await mongoose.connect(process.env.MONGO_URI as string);
+  const db = mongoose.connection.db!;
+  const r = await db
+    .collection("listings")
+    .updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { "location.state": state.toUpperCase() } }
+    );
+  console.log(JSON.stringify({ matched: r.matchedCount, modified: r.modifiedCount }, null, 2));
+  await mongoose.disconnect();
+}
+
 async function cmdPreview() {
   const listing = arg("listing");
   const start = arg("start");
   const end = arg("end");
+  const promo = arg("promo");
   if (!isId24(listing)) throw new Error("Missing/invalid --listing (24 hex)");
   if (!start || !end) throw new Error("Missing --start/--end");
-  const out = await http("POST", "/quotes/preview", { listingId: listing, start, end });
+  const out = await http("POST", "/quotes/preview", {
+    listingId: listing,
+    start,
+    end,
+    ...(promo ? { promoCode: promo } : {}),
+  });
   console.log(JSON.stringify(out, null, 2));
 }
 
@@ -453,7 +475,7 @@ async function cmdMediaTest() {
   console.log(JSON.stringify(attached, null, 2));
 }
 
-// payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO> [--idemp <KEY>]
+// payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO> [--promo CODE] [--idemp <KEY>]
 async function cmdPaymentsIntentCreate() {
   const as: Role = (arg("as") as Role) || "renter";
   if (as !== "renter") throw new Error("--as must be renter for payments");
@@ -462,11 +484,15 @@ async function cmdPaymentsIntentCreate() {
   const listing = arg("listing");
   const start = arg("start");
   const end = arg("end");
+  const promo = arg("promo");
   const idemp = arg("idemp") || `cli-${Date.now()}`;
   if (!isId24(listing)) throw new Error("Missing/invalid --listing (24 hex)");
   if (!start || !end) throw new Error("Missing --start/--end (ISO)");
 
-  const out = await http("POST", "/payments/intents", { listingId: listing, start, end }, token, {
+  const body: any = { listingId: listing, start, end };
+  if (promo) body.promoCode = promo;
+
+  const out = await http("POST", "/payments/intents", body, token, {
     "X-Idempotency-Key": idemp,
   });
   console.log(JSON.stringify(out, null, 2));
@@ -548,6 +574,9 @@ async function main() {
         break;
       case "listing:ensure":
         await cmdListingEnsure();
+        break;
+      case "listing:set-state":
+        await cmdListingSetState();
         break;
       case "preview":
         await cmdPreview();
@@ -655,6 +684,18 @@ npm run cli -- bookings:cancel  --as renter --id <BID>
   npm run cli -- asset:attach --id <ASSET_ID> --url "<PUBLIC_URL>" --label "front" --as host
   npm run cli -- asset:remove --id <ASSET_ID> --url "<PUBLIC_URL>" --as host
   npm run cli -- media:test --asset <ASSET_ID> --file ./local.jpg --folder assets --type image/jpeg --label "front" --as host
+
+  # pricing / preview (times in ISO UTC, e.g. 2025-09-15T05:00:00Z)
+npm run cli -- preview --listing <LID> --start <ISO> --end <ISO> [--promo CODE]
+
+# C6/C8 pay-first flow
+npm run cli -- payments:intent:create --as renter --listing <LID> --start <ISO> --end <ISO> [--promo CODE] [--idemp my-key]
+
+npm run cli -- listing:set-state --id <LID> --state NE
+npm run cli -- preview --listing <LID> --start $START --end $END
+# Expect: Tax (7.50%)
+
+
 `
         );
     }

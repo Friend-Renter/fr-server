@@ -3,10 +3,13 @@ import { Router } from "express";
 import mongoose from "mongoose";
 import { z } from "zod";
 
+import { getEnvPromos } from "../../config/env.js";
+import { logger } from "../../config/logger.js";
 import { enumerateBuckets } from "../../utils/dates.js";
 import { asyncHandler } from "../../utils/http.js";
 import { Listing } from "../listings/model.js";
 import { BookingLock } from "../locks/model.js";
+import { computeQuote } from "../pricing/calc.js";
 
 const router = Router();
 
@@ -14,6 +17,7 @@ const PreviewSchema = z.object({
   listingId: z.string().length(24),
   start: z.coerce.date(),
   end: z.coerce.date(),
+  promoCode: z.string().trim().min(1).optional(),
 });
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -26,12 +30,20 @@ const HOUR_CATS = new Set(["car", "boat", "jetski"]);
 router.post(
   "/preview",
   asyncHandler(async (req, res) => {
-    const { listingId, start, end } = PreviewSchema.parse(req.body);
+    const { listingId, start, end, promoCode } = PreviewSchema.parse(req.body);
 
     if (end <= start) {
       return res
         .status(422)
         .json({ error: { code: "INVALID_WINDOW", message: "end must be after start" } });
+    }
+
+    // ---- C8: promo validation (explicit error) ----
+    if (promoCode) {
+      const promo = getEnvPromos().find((p) => p.code === promoCode.trim().toUpperCase());
+      if (!promo) {
+        return res.status(422).json({ error: { code: "INVALID_PROMO", message: "Unknown promo" } });
+      }
     }
 
     const listing = await Listing.findById(listingId).lean();
@@ -83,52 +95,52 @@ router.post(
       });
     }
 
-    // --- Pricing ---
-    // For hour categories, bill by whole days (ceil) even though selection is hourly.
-    // For day categories, bill per-day based on number of day buckets.
-    const p = (listing as any).pricing || {};
-    const feeCents = p.feeCents ?? 0;
-    const depositCents = p.depositCents ?? 0;
-
-    const daily =
-      (p.baseDailyCents as number | undefined) ??
-      ((p.baseHourlyCents as number | undefined) ?? 0) * 24;
-
-    if (!daily) {
-      return res
-        .status(422)
-        .json({ error: { code: "NO_PRICING", message: "Missing daily/hourly pricing" } });
+    // ---------- C8: delegate pricing to shared calculator ----------
+    // Re-load as a full doc (non-lean) for calc typing; calc only needs pricing/location fields.
+    const listingDoc = await Listing.findById(listingId);
+    if (!listingDoc) {
+      return res.status(404).json({ error: { code: "LISTING_NOT_FOUND" } });
     }
+    const q = await computeQuote({ listing: listingDoc as any, start, end, promoCode });
 
-    let nUnits = buckets.length;
-    let baseCents = 0;
+    // For hour categories, we still show billableDays (ceil) for transparency
     let billableDays: number | undefined;
-
     if (granularity === "hour") {
       const durationMs = end.getTime() - start.getTime();
       billableDays = Math.max(1, Math.ceil(durationMs / (24 * 3600 * 1000)));
-      baseCents = daily * billableDays;
-    } else {
-      // day-based search & day-based billing
-      baseCents = daily * nUnits;
     }
 
-    const taxCents = 0; // tax later (C7)
-    const totalCents = baseCents + feeCents + taxCents;
+    // ---- C8: lightweight info log on preview ----
+    logger.info("quotes.preview", {
+      listingId,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      granularity,
+      nUnits: buckets.length,
+      promoCode: promoCode ?? null,
+      totalCents: q.totalCents,
+    });
 
     return res.json({
       listingId,
       start: start.toISOString(),
       end: end.toISOString(),
-      granularity, // 'hour' for car/boat/jetski; 'day' otherwise
-      nUnits, // availability buckets count (hours or days)
+      granularity, // 'hour' for car/boat/jetski; 'day' otherwise (selection granularity)
+      nUnits: buckets.length, // availability buckets count (hours or days)
       ...(billableDays ? { billableDays } : {}),
+      // Itemized pricing snapshot (C8)
       pricingSnapshot: {
-        baseCents,
-        feeCents,
-        taxCents,
-        depositCents,
-        totalCents,
+        currency: q.currency,
+        baseCents: q.baseCents,
+        feeCents: q.feeCents,
+        discountCents: q.discountCents,
+        taxCents: q.taxCents,
+        depositCents: q.depositCents,
+        totalCents: q.totalCents,
+        lineItems: q.lineItems,
+        promoCode: promoCode ?? null,
+        granularity: q.granularity, // billing granularity ('hour' | 'day') based on category rules
+        nUnits: q.nUnits, // billing units count
       },
     });
   })

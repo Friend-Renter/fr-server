@@ -23,15 +23,27 @@ const LineItemSchema = new Schema(
 );
 
 /** Immutable pricing snapshot at time of booking/quote. */
+// src/modules/bookings/model.ts
+// (inside your PricingSnapshot sub-schema)
 const PricingSnapshotSchema = new Schema(
   {
-    currency: { type: String, default: "USD" },
-    baseCents: { type: Number, required: true, min: 0 },
-    feeCents: { type: Number, default: 0, min: 0 },
-    taxCents: { type: Number, default: 0, min: 0 },
-    depositCents: { type: Number, default: 0, min: 0 },
-    totalCents: { type: Number, required: true, min: 0 },
-    lineItems: { type: [LineItemSchema], default: [] },
+    currency: { type: String, required: true },
+    totalCents: { type: Number, required: true },
+
+    // C8 additions
+    baseCents: { type: Number },
+    feeCents: { type: Number },
+    discountCents: { type: Number },
+    taxCents: { type: Number },
+    depositCents: { type: Number },
+    promoCode: { type: String, default: null },
+    lineItems: [
+      {
+        code: { type: String, enum: ["BASE", "FEE", "PROMO", "TAX"], required: true },
+        label: { type: String, required: true },
+        amountCents: { type: Number, required: true },
+      },
+    ],
   },
   { _id: false }
 );

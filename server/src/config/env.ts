@@ -46,6 +46,12 @@ const EnvSchema = z.object({
 
   STRIPE_SECRET_KEY: z.string().min(1),
   STRIPE_WEBHOOK_SECRET: z.string().min(1),
+  // C8 — Pricing
+  TAX_RATE_PCT: z.string().optional(), // e.g. "8.25"
+  TAX_RATE_MAP: z.string().optional(), // e.g. "NE:7.5,TX:8.25,IA:7.0"
+  TAX_EXEMPT_STATES: z.string().optional(), // e.g. "OR,MT,NH,DE,AK"
+  TAXABLE_FEE: z.string().optional(), // "true" | "false" (default true)
+  PROMOS: z.string().optional(), // e.g. "SAVE10:percent:10|label=Spring Sale;FLAT5:flat:500"
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -62,3 +68,84 @@ export const env = parsed.data;
 export const corsOrigins = env.CORS_ORIGINS.split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+
+// ----------------------------
+// C8 helper parsers & types
+// ----------------------------
+export type PromoDef =
+  | { code: string; kind: "percent"; value: number; label?: string; enabled: true }
+  | { code: string; kind: "flat"; value: number; label?: string; enabled: true };
+
+export function getTaxableFee(): boolean {
+  const v = env.TAXABLE_FEE?.toLowerCase();
+  if (v === undefined) return true;
+  return v !== "false";
+}
+
+/** Returns default tax as a decimal (e.g., 0.0825 for "8.25"). */
+export function getTaxRateDefault(): number {
+  const s = env.TAX_RATE_PCT?.trim();
+  if (!s) return 0;
+  const pct = Number(s);
+  return Number.isFinite(pct) && pct >= 0 ? pct / 100 : 0;
+}
+
+/** Parses TAX_RATE_MAP into { NE:0.075, TX:0.0825, ... } */
+export function getTaxRateMap(): Record<string, number> {
+  const mapStr = env.TAX_RATE_MAP?.trim();
+  if (!mapStr) return {};
+  const out: Record<string, number> = {};
+  for (const pair of mapStr.split(",")) {
+    const [stateRaw, pctRaw] = pair.split(":").map((x) => x?.trim());
+    if (!stateRaw || !pctRaw) continue;
+    const state = stateRaw.toUpperCase();
+    const pct = Number(pctRaw);
+    if (state && Number.isFinite(pct) && pct >= 0) out[state] = pct / 100;
+  }
+  return out;
+}
+
+/** Parses TAX_EXEMPT_STATES into a Set("OR","MT",...). */
+export function getTaxExemptStates(): Set<string> {
+  const s = env.TAX_EXEMPT_STATES?.trim();
+  if (!s) return new Set();
+  return new Set(
+    s
+      .split(",")
+      .map((x) => x.trim().toUpperCase())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Parses PROMOS env into an array of promo definitions.
+ * Format examples:
+ *   SAVE10:percent:10|label=Spring Sale;FLAT5:flat:500|label=$5 off
+ */
+export function getEnvPromos(): PromoDef[] {
+  const src = env.PROMOS?.trim();
+  if (!src) return [];
+  return src
+    .split(";")
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => {
+      const [main, ...flags] = chunk.split("|").map((x) => x.trim());
+      const [codeRaw, kindRaw, valueRaw] = main.split(":").map((x) => x.trim());
+      const code = (codeRaw || "").toUpperCase();
+      const kind = (kindRaw || "").toLowerCase() as "percent" | "flat";
+      const value = Number(valueRaw);
+      const meta: Record<string, string> = {};
+      for (const f of flags) {
+        const [k, v] = f.split("=").map((x) => x?.trim());
+        if (k && v) meta[k] = v;
+      }
+      if (!code || !Number.isFinite(value) || value < 0) return null;
+      if (kind !== "percent" && kind !== "flat") return null;
+      const base = { code, label: meta["label"], enabled: true as const };
+      return kind === "percent"
+        ? ({ ...base, kind, value } as PromoDef)
+        : ({ ...base, kind, value } as PromoDef);
+    })
+    .filter((x): x is PromoDef => Boolean(x));
+}
