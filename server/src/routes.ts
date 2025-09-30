@@ -3,11 +3,18 @@
 import { Router } from "express";
 
 import { pingMongo } from "./config/db.js";
+import { logger } from "./config/logger.js";
 import { pingRedis } from "./config/redis.js";
+import { requireAuth, requireRole } from "./middlewares/auth.js";
 import adminRouter from "./modules/admin/routes.js";
 import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
 import bookingsRouter from "./modules/bookings/routes.js";
+import {
+  publicRouter as flagsRouter,
+  adminRouter as flagsAdminRouter,
+} from "./modules/flags/routes.js";
+import { ensureFlagsSeeded, getFlagsSnapshotCompact } from "./modules/flags/service.js";
 import listingsRouter from "./modules/listings/routes.js";
 import mediaRouter from "./modules/media/routes.js";
 import paymentsRouter from "./modules/payments/routes.js";
@@ -19,6 +26,7 @@ import stripeWebhookRouter from "./modules/webhooks/stripe.js";
 import { asyncHandler, jsonOk } from "./utils/http.js";
 
 export const router = Router();
+void ensureFlagsSeeded();
 
 // Feature mounts
 router.use("/auth", authRouter);
@@ -31,6 +39,8 @@ router.use("/quotes", quotesRouter); // POST /quotes/preview
 router.use("/listings", listingsRouter); // GET /listings/:id/availability
 router.use("/users", usersRouter); // e.g., GET /me
 router.use("/admin", adminRouter);
+router.use("/flags", flagsRouter);
+router.use("/admin/flags", requireAuth, requireRole("admin"), flagsAdminRouter);
 
 // KYC
 router.use("/kyc", kycRouter);
@@ -41,6 +51,14 @@ router.get(
   asyncHandler(async (_req, res) => {
     const uptime = process.uptime();
     const version = process.env.npm_package_version || "0.0.0";
+
+    try {
+      const snap = await getFlagsSnapshotCompact();
+      logger.info("health.flags", { flags: snap });
+    } catch (e: any) {
+      logger.warn("health.flags_error", { error: e?.message || String(e) });
+    }
+
     jsonOk(res, { status: "ok", uptime, version });
   })
 );

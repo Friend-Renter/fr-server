@@ -12,6 +12,7 @@ import {
 } from "./service.js";
 import { key as rkey } from "../../config/redis.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
+import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
 import { getOrSetIdempotent } from "../../utils/idemptoency.js";
 
@@ -25,6 +26,7 @@ router.post(
   "/",
   requireAuth,
   requireRole("renter"),
+  requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
     const { paymentIntentId } = CreateSchema.parse(req.body);
@@ -126,6 +128,7 @@ function shapeCheckpoint(cp?: BookingDoc["checkin"]) {
 router.post(
   "/:id/checkin",
   requireAuth,
+  requireFlag("checkin.enabled"),
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);
@@ -165,6 +168,7 @@ router.post(
 // POST /bookings/:id/checkout
 router.post(
   "/:id/checkout",
+  requireFlag("checkout.enabled"),
   requireAuth,
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);

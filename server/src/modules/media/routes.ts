@@ -5,6 +5,7 @@ import { z } from "zod";
 import { env } from "../../config/env.js";
 import { buildKey, presignPut, toPublicUrl } from "../../lib/s3.js";
 import { requireAuth } from "../../middlewares/auth.js";
+import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
 
 const router = Router();
@@ -18,6 +19,7 @@ const SignSchema = z.object({
 router.post(
   "/sign",
   requireAuth,
+  requireFlag("uploads.enabled"),
   asyncHandler(async (req, res) => {
     if (!env.S3_BUCKET) {
       return res

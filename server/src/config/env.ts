@@ -52,6 +52,8 @@ const EnvSchema = z.object({
   TAX_EXEMPT_STATES: z.string().optional(), // e.g. "OR,MT,NH,DE,AK"
   TAXABLE_FEE: z.string().optional(), // "true" | "false" (default true)
   PROMOS: z.string().optional(), // e.g. "SAVE10:percent:10|label=Spring Sale;FLAT5:flat:500"
+
+  FLAGS_DEFAULT: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

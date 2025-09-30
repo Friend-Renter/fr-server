@@ -7,6 +7,7 @@ import { getEnvPromos } from "../../config/env.js";
 import { key, redisClient } from "../../config/redis.js";
 import { stripe } from "../../lib/stripe.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
+import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
 import { buildBucketsAndGranularity } from "../bookings/service.js";
 import { Listing } from "../listings/model.js";
@@ -26,6 +27,7 @@ router.post(
   "/intents",
   requireAuth,
   requireRole("renter"),
+  requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
     const { listingId, start, end, promoCode } = IntentSchema.parse(req.body);
