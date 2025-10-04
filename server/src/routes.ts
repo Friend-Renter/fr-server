@@ -15,6 +15,7 @@ import {
   adminRouter as flagsAdminRouter,
 } from "./modules/flags/routes.js";
 import { ensureFlagsSeeded, getFlagsSnapshotCompact } from "./modules/flags/service.js";
+import { friendsRouter } from "./modules/friends/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
 import mediaRouter from "./modules/media/routes.js";
 import paymentsRouter from "./modules/payments/routes.js";
@@ -36,6 +37,7 @@ router.use("/payments", paymentsRouter);
 router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search
 router.use("/quotes", quotesRouter); // POST /quotes/preview
+router.use("/friends", friendsRouter);
 router.use("/listings", listingsRouter); // GET /listings/:id/availability
 router.use("/users", usersRouter); // e.g., GET /me
 router.use("/admin", adminRouter);
