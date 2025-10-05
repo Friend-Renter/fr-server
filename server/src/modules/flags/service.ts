@@ -11,6 +11,8 @@ export type Flags = {
   checkin: { enabled: boolean };
   checkout: { enabled: boolean };
   uploads: { enabled: boolean };
+  listings: { enabled: boolean };
+  pricing: { enabled: boolean };
 };
 
 export type FlagsDoc = { flags: Flags; updatedAt: string };
@@ -21,6 +23,8 @@ const ALLOW = [
   "checkin.enabled",
   "checkout.enabled",
   "uploads.enabled",
+  "listings.enabled",
+  "pricing.enabled",
 ] as const;
 const ALLOW_SET = new Set<string>(ALLOW);
 
@@ -35,6 +39,8 @@ function allTrue(): Flags {
     checkin: { enabled: true },
     checkout: { enabled: true },
     uploads: { enabled: true },
+    listings: { enabled: true },
+    pricing: { enabled: true },
   };
 }
 
