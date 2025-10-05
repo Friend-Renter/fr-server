@@ -60,3 +60,18 @@ export async function acceptRequest(reqDoc: FriendRequestDoc) {
 
   return reqDoc;
 }
+
+function httpError(status: number, code: string, message?: string) {
+  const err: any = new Error(message || code);
+  err.status = status;
+  err.code = code;
+  return err;
+}
+
+export async function acceptFriendRequestById(actorId: string, requestId: string) {
+  const fr = await FriendRequest.findById(requestId);
+  if (!fr || fr.status !== "pending") throw httpError(404, "REQUEST_NOT_FOUND");
+  if (fr.toUserId !== actorId) throw httpError(403, "FORBIDDEN");
+  await acceptRequest(fr);
+  return fr;
+}

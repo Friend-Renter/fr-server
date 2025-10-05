@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import mongoose from "mongoose"; // 👈 add this
 
 import { sortPair, FriendRequest, Friendship } from "./model.js";
 import { areFriends, ensurePendingRequest, acceptRequest } from "./service.js";
@@ -16,6 +17,13 @@ function pubUser(u: any) {
   };
 }
 
+// 👇 helper: keep only valid objectIds and convert to ObjectId instances
+function toObjectIds(ids: string[]): mongoose.Types.ObjectId[] {
+  return ids
+    .filter((id) => mongoose.isValidObjectId(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+}
+
 export async function listFriends(req: Request, res: Response) {
   const { userId } = getAuth(req);
   const status = String(req.query.status || "accepted");
@@ -23,14 +31,17 @@ export async function listFriends(req: Request, res: Response) {
   if (status === "accepted") {
     const docs = await Friendship.find({ $or: [{ userA: userId }, { userB: userId }] }).lean();
     const otherIds = docs.map((d) => (d.userA === userId ? d.userB : d.userA));
-    const users = await User.find({ _id: { $in: otherIds } }).lean();
+    const valid = toObjectIds(otherIds);
+    const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
     return res.json({ items: otherIds.map((id) => ({ user: pubUser(map.get(id)) })) });
   }
 
   if (status === "incoming") {
     const docs = await FriendRequest.find({ toUserId: userId, status: "pending" }).lean();
-    const users = await User.find({ _id: { $in: docs.map((d) => d.fromUserId) } }).lean();
+    const fromIds = docs.map((d) => d.fromUserId);
+    const valid = toObjectIds(fromIds);
+    const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
     return res.json({
       items: docs.map((d) => ({
@@ -43,7 +54,9 @@ export async function listFriends(req: Request, res: Response) {
 
   if (status === "outgoing") {
     const docs = await FriendRequest.find({ fromUserId: userId, status: "pending" }).lean();
-    const users = await User.find({ _id: { $in: docs.map((d) => d.toUserId) } }).lean();
+    const toIds = docs.map((d) => d.toUserId);
+    const valid = toObjectIds(toIds);
+    const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
     return res.json({
       items: docs.map((d) => ({
@@ -61,18 +74,30 @@ export async function listFriends(req: Request, res: Response) {
 
 export async function postRequest(req: Request, res: Response) {
   const { userId } = getAuth(req);
-  const toUserId = String(req.body?.toUserId || "");
-  if (!toUserId)
+  const toUserId = String(req.body?.toUserId || "").trim();
+
+  if (!toUserId) {
     return res.status(422).json({
       error: {
         code: "VALIDATION",
         details: [{ path: ["toUserId"], message: "toUserId is required" }],
       },
     });
-  if (toUserId === userId)
+  }
+  if (toUserId === userId) {
     return res
       .status(422)
       .json({ error: { code: "INVALID_SELF", message: "Cannot friend yourself" } });
+  }
+
+  // 👇 New: only allow requests to real users with valid ObjectIds
+  if (!mongoose.isValidObjectId(toUserId)) {
+    return res.status(422).json({ error: { code: "INVALID_USER_ID", message: "Invalid user id" } });
+  }
+  const exists = await User.exists({ _id: new mongoose.Types.ObjectId(toUserId) });
+  if (!exists) {
+    return res.status(404).json({ error: { code: "USER_NOT_FOUND" } });
+  }
 
   const ensured = await ensurePendingRequest(userId, toUserId);
   if ("alreadyFriends" in ensured && ensured.alreadyFriends) {
@@ -106,6 +131,25 @@ export async function declineFriendRequest(req: Request, res: Response) {
   fr.status = "declined";
   await fr.save();
   return res.json({ ok: true });
+}
+
+export async function searchUsers(req: Request, res: Response) {
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.json({ items: [] });
+
+  const { userId: me } = getAuth(req);
+  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
+  const users = await (
+    await import("../users/model.js")
+  ).User.find({
+    _id: { $ne: new mongoose.Types.ObjectId(me) }, // 👈 exclude me safely
+    $or: [{ email: rx }, { firstName: rx }, { lastName: rx }],
+  })
+    .limit(25)
+    .lean();
+
+  return res.json({ items: users.map(pubUser) });
 }
 
 /** DELETE /friends/requests/:id  (requester cancels their own pending request) */
@@ -148,40 +192,64 @@ export async function unfriend(req: Request, res: Response) {
   return res.json({ ok: true, removed: true });
 }
 
-export async function searchUsers(req: Request, res: Response) {
-  const q = String(req.query.q || "").trim();
-  if (!q) return res.json({ items: [] });
-
-  const { userId: me } = getAuth(req); // 👈 who is searching
-  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-
-  const users = await (
-    await import("../users/model.js")
-  ).User.find({
-    _id: { $ne: me }, // 👈 exclude me
-    $or: [{ email: rx }, { firstName: rx }, { lastName: rx }],
-  })
-    .limit(25)
-    .lean();
-
-  return res.json({ items: users.map(pubUser) });
-}
-
 export async function getUserPublic(req: Request, res: Response) {
   const id = String(req.params.id);
+  // 👇 Harden: 404 on invalid ObjectId instead of throwing CastError
+  if (!mongoose.isValidObjectId(id)) {
+    return res.status(404).json({ error: { code: "NOT_FOUND" } });
+  }
   const u = await (await import("../users/model.js")).User.findById(id).lean();
   if (!u) return res.status(404).json({ error: { code: "NOT_FOUND" } });
   return res.json(pubUser(u));
 }
 
-/** Helper the booking routes can use to return 403 + ensure pending request */
-export async function guardFriendshipOrEnsurePending(guestId: string, hostId: string) {
+type FriendshipGuard = null | {
+  code: "FRIENDSHIP_REQUIRED";
+  relatedRequestId?: string;
+  direction: "incoming" | "outgoing" | "none";
+  otherUser: { id: string; name?: string };
+};
+
+export async function guardFriendshipOrEnsurePending(
+  guestId: string,
+  hostId: string
+): Promise<FriendshipGuard> {
   if (await areFriends(guestId, hostId)) return null;
-  const ensured = await ensurePendingRequest(guestId, hostId);
+
+  // 1) Find existing pending as a Document (no .lean())
+  let pending = await FriendRequest.findOne({
+    status: "pending",
+    $or: [
+      { fromUserId: guestId, toUserId: hostId },
+      { fromUserId: hostId, toUserId: guestId },
+    ],
+  });
+
+  // 2) Ensure/create (guest -> host) if none; also a Document
+  if (!pending) {
+    const ensured = await ensurePendingRequest(guestId, hostId);
+    if ("request" in ensured && ensured.request) {
+      pending = ensured.request; // still a Document
+    }
+  }
+
+  let direction: "incoming" | "outgoing" | "none" = "none";
+  let relatedRequestId: string | undefined;
+
+  if (pending) {
+    relatedRequestId = String(pending._id);
+    direction = pending.fromUserId === guestId ? "outgoing" : "incoming";
+  }
+
+  const host = await User.findById(hostId, { fullName: 1, firstName: 1, lastName: 1 }).lean();
+  const hostName =
+    host?.fullName || [host?.firstName, host?.lastName].filter(Boolean).join(" ") || undefined;
+
   return {
-    code: "NOT_FRIENDS",
-    requiresFriendship: true,
-    relatedRequestId: "request" in ensured ? String(ensured.request?._id) : undefined,
+    code: "FRIENDSHIP_REQUIRED",
+    relatedRequestId,
+    direction,
+    otherUser: { id: hostId, name: hostName },
   };
 }
 
