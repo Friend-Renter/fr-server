@@ -4,6 +4,7 @@ import mongoose from "mongoose"; // 👈 add this
 import { sortPair, FriendRequest, Friendship } from "./model.js";
 import { areFriends, ensurePendingRequest, acceptRequest } from "./service.js";
 import { getAuth } from "../../middlewares/auth.js";
+import { notify } from "../notifications/service.js";
 import { User } from "../users/model.js";
 
 function pubUser(u: any) {
@@ -76,6 +77,7 @@ export async function postRequest(req: Request, res: Response) {
   const { userId } = getAuth(req);
   const toUserId = String(req.body?.toUserId || "").trim();
 
+  // Basic validation
   if (!toUserId) {
     return res.status(422).json({
       error: {
@@ -90,7 +92,7 @@ export async function postRequest(req: Request, res: Response) {
       .json({ error: { code: "INVALID_SELF", message: "Cannot friend yourself" } });
   }
 
-  // 👇 New: only allow requests to real users with valid ObjectIds
+  // Only allow requests to real users with valid ObjectIds
   if (!mongoose.isValidObjectId(toUserId)) {
     return res.status(422).json({ error: { code: "INVALID_USER_ID", message: "Invalid user id" } });
   }
@@ -99,13 +101,38 @@ export async function postRequest(req: Request, res: Response) {
     return res.status(404).json({ error: { code: "USER_NOT_FOUND" } });
   }
 
+  // Idempotent ensure
   const ensured = await ensurePendingRequest(userId, toUserId);
   if ("alreadyFriends" in ensured && ensured.alreadyFriends) {
     return res.json({ alreadyFriends: true });
   }
-  return res.status(ensured.request?.wasNew ? 201 : 200).json({
-    request: { id: String(ensured.request!._id), fromUserId: userId, toUserId, status: "pending" },
+
+  // NOTE: ensurePendingRequest now returns { request, wasNew }
+  const statusCode = ensured.wasNew ? 201 : 200;
+  res.status(statusCode).json({
+    request: {
+      id: String(ensured.request!._id),
+      fromUserId: userId,
+      toUserId,
+      status: "pending",
+    },
   });
+
+  // Fire-and-forget notification (best-effort)
+  (async () => {
+    try {
+      const actor = await User.findById(userId, { fullName: 1 }).lean();
+      await notify({
+        userId: toUserId,
+        type: "friend.request_created",
+        actor: { id: userId, name: actor?.fullName },
+        context: { requestId: String(ensured.request!._id) },
+        uniqKey: `friend.request_created:${ensured.request!._id}`,
+      });
+    } catch {
+      // swallow
+    }
+  })();
 }
 
 export async function acceptFriendRequest(req: Request, res: Response) {
@@ -117,6 +144,20 @@ export async function acceptFriendRequest(req: Request, res: Response) {
   if (fr.toUserId !== userId) return res.status(403).json({ error: { code: "FORBIDDEN" } });
 
   await acceptRequest(fr);
+  // notify original requester
+  (async () => {
+    try {
+      const actor = await User.findById(userId, { fullName: 1 }).lean();
+      await notify({
+        userId: fr.fromUserId,
+        type: "friend.request_accepted",
+        actor: { id: userId, name: actor?.fullName },
+        context: { requestId: String(fr._id) },
+        uniqKey: `friend.request_accepted:${fr._id}`,
+      });
+    } catch (e) {}
+  })();
+
   return res.json({ ok: true });
 }
 

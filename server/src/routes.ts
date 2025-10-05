@@ -19,6 +19,7 @@ import { ensureFlagsSeeded, getFlagsSnapshotCompact } from "./modules/flags/serv
 import { friendsRouter } from "./modules/friends/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
 import mediaRouter from "./modules/media/routes.js";
+import notificationsRouter from "./modules/notifications/routes.js";
 import paymentsRouter from "./modules/payments/routes.js";
 import quotesRouter from "./modules/quotes/routes.js";
 import searchRouter from "./modules/search/routes.js";
@@ -35,6 +36,7 @@ router.use("/auth", authRouter);
 router.use("/bookings", bookingsRouter);
 router.use("/media", mediaRouter);
 router.use("/bookingRequests", bookingRequestsRoutes);
+router.use("/notifications", notificationsRouter);
 router.use("/payments", paymentsRouter);
 router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search

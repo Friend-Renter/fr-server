@@ -1,3 +1,5 @@
+import mongoose from "mongoose";
+
 import { FriendRequest, Friendship, sortPair, type FriendRequestDoc } from "./model.js";
 
 /** Are two users already friends? */
@@ -12,23 +14,21 @@ export async function ensurePendingRequest(from: string, to: string) {
   if (from === to)
     throw Object.assign(new Error("Cannot friend yourself"), { code: "INVALID_SELF" });
 
-  // If already friends, short-circuit
-  if (await areFriends(from, to)) {
-    return { alreadyFriends: true as const };
-  }
+  // already friends?
+  if (await areFriends(from, to)) return { alreadyFriends: true as const };
 
-  // If an existing pending (any direction) exists, return it
+  const fromId = new mongoose.Types.ObjectId(from);
+  const toId = new mongoose.Types.ObjectId(to);
+
   const existing = await FriendRequest.findOne({
     $or: [
-      { fromUserId: from, toUserId: to, status: "pending" },
-      { fromUserId: to, toUserId: from, status: "pending" },
+      { fromUserId: fromId, toUserId: toId, status: "pending" },
+      { fromUserId: toId, toUserId: fromId, status: "pending" },
     ],
   });
-  if (existing) return { request: existing };
-
-  // Create new pending from -> to
+  if (existing) return { request: existing, wasNew: false };
   const created = await FriendRequest.create({ fromUserId: from, toUserId: to, status: "pending" });
-  return { request: created };
+  return { request: created, wasNew: true };
 }
 
 /** Accept a request (toUserId must be me). Also create Friendship idempotently. */

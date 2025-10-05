@@ -54,6 +54,16 @@ const EnvSchema = z.object({
   PROMOS: z.string().optional(), // e.g. "SAVE10:percent:10|label=Spring Sale;FLAT5:flat:500"
 
   FLAGS_DEFAULT: z.string().optional(),
+
+  // ---- Push / Notifications ----
+  FCM_PROJECT_ID: z.string().optional().default(""),
+  FCM_CLIENT_EMAIL: z.string().optional().default(""),
+  FCM_PRIVATE_KEY: z.string().optional().default(""),
+  APNS_TEAM_ID: z.string().optional().default(""),
+  APNS_KEY_ID: z.string().optional().default(""),
+  APNS_P8: z.string().optional().default(""), // base64 or raw p8 content
+  APNS_BUNDLE_ID: z.string().optional().default(""),
+  APNS_ENV: z.enum(["dev", "prod"]).optional().default("dev"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -151,3 +161,18 @@ export function getEnvPromos(): PromoDef[] {
     })
     .filter((x): x is PromoDef => Boolean(x));
 }
+
+export const pushConfig = {
+  fcm: {
+    projectId: env.FCM_PROJECT_ID,
+    clientEmail: env.FCM_CLIENT_EMAIL,
+    privateKey: env.FCM_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+  },
+  apns: {
+    teamId: env.APNS_TEAM_ID,
+    keyId: env.APNS_KEY_ID,
+    p8: env.APNS_P8?.replace(/\\n/g, "\n"),
+    bundleId: env.APNS_BUNDLE_ID,
+    env: env.APNS_ENV,
+  },
+};
