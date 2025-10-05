@@ -152,11 +152,13 @@ export async function searchUsers(req: Request, res: Response) {
   const q = String(req.query.q || "").trim();
   if (!q) return res.json({ items: [] });
 
-  // very simple text search for now (email or name contains)
+  const { userId: me } = getAuth(req); // 👈 who is searching
   const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+
   const users = await (
     await import("../users/model.js")
   ).User.find({
+    _id: { $ne: me }, // 👈 exclude me
     $or: [{ email: rx }, { firstName: rx }, { lastName: rx }],
   })
     .limit(25)
@@ -181,4 +183,40 @@ export async function guardFriendshipOrEnsurePending(guestId: string, hostId: st
     requiresFriendship: true,
     relatedRequestId: "request" in ensured ? String(ensured.request?._id) : undefined,
   };
+}
+
+export async function statusWith(req: Request, res: Response) {
+  const me = getAuth(req).userId;
+  const other = String(req.params.otherId);
+
+  // already friends?
+  const friends = await areFriends(me, other);
+  if (friends) return res.json({ areFriends: true });
+
+  // any pending?
+  const pending = await FriendRequest.findOne({
+    status: "pending",
+    $or: [
+      { fromUserId: me, toUserId: other },
+      { fromUserId: other, toUserId: me },
+    ],
+  }).lean();
+
+  if (!pending) return res.json({ areFriends: false, pending: null });
+
+  const direction = pending.fromUserId === me ? "outgoing" : "incoming";
+  return res.json({
+    areFriends: false,
+    pending: { id: String(pending._id), direction },
+  });
+}
+
+export async function counts(req: Request, res: Response) {
+  const { userId } = getAuth(req);
+  const [incoming, outgoing, accepted] = await Promise.all([
+    FriendRequest.countDocuments({ toUserId: userId, status: "pending" }),
+    FriendRequest.countDocuments({ fromUserId: userId, status: "pending" }),
+    Friendship.countDocuments({ $or: [{ userA: userId }, { userB: userId }] }),
+  ]);
+  res.json({ incoming, outgoing, accepted });
 }
