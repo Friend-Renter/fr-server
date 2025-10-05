@@ -142,3 +142,6 @@ vite.config.ts.timestamp-*
 
 # dev CLI session cache
 server/tmp/
+
+# Ignore server build output
+/server/dist
