@@ -13,7 +13,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "jest --passWithNoTests",
-    "prepare": "husky",
+    "prepare": "if [ \"$NODE_ENV\" != \"production\" ]; then husky; fi",
     "db:sync-indexes": "tsx scripts/sync-indexes.ts",
     "cli": "tsx scripts/cli.ts",
     "c7": "tsx scripts/c7.ts",
