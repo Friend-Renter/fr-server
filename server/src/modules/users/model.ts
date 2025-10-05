@@ -4,7 +4,7 @@ import mongoose, { Schema, type Model } from "mongoose";
 import { env } from "../../config/env.js";
 
 /** Roles for FR */
-export type Role = "renter" | "host" | "admin";
+export type Role = "user" | "admin";
 
 /** KYC lifecycle */
 export type KycStatus = "unverified" | "pending" | "verified" | "failed" | "rejected";
@@ -83,6 +83,12 @@ export interface UserDoc extends mongoose.Document {
     stripe?: { accountId?: string; onboarded?: boolean };
   };
 
+  /** Hosting capability (separate from role) */
+  canHost?: boolean; // feature gate for Garage, etc.
+  hostStatus?: "not_applied" | "pending" | "approved" | "rejected";
+  hostApprovedAt?: Date | null;
+  hostNotes?: string | null;
+
   /** Timestamps (from { timestamps: true }) */
   createdAt: Date;
   updatedAt: Date;
@@ -104,7 +110,7 @@ const UserSchema = new Schema<UserDoc>(
     },
     firstName: { type: String, required: true, trim: true, maxlength: 50 },
     lastName: { type: String, required: true, trim: true, maxlength: 50 },
-    role: { type: String, enum: ["renter", "host", "admin"], default: "renter" },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     isEmailVerified: { type: Boolean, default: false },
 
     passwordHash: { type: String, required: true, select: false },
@@ -122,6 +128,16 @@ const UserSchema = new Schema<UserDoc>(
     kycUpdatedAt: { type: Date },
     defaultAddress: { type: AddressSchema, required: false },
     payout: { type: PayoutSchema, required: false },
+
+    /** Hosting capability */
+    canHost: { type: Boolean, default: false },
+    hostStatus: {
+      type: String,
+      enum: ["not_applied", "pending", "approved", "rejected"],
+      default: "not_applied",
+    },
+    hostApprovedAt: { type: Date, default: null },
+    hostNotes: { type: String, default: null },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -195,6 +211,7 @@ UserSchema.index({ "defaultAddress.location": "2dsphere" });
 // at bottom of users/model.ts (near indexes)
 UserSchema.index({ role: 1 });
 UserSchema.index({ kycStatus: 1 });
+UserSchema.index({ canHost: 1, hostStatus: 1 });
 
 export const User: Model<UserDoc> =
   mongoose.models.User || mongoose.model<UserDoc>("User", UserSchema);

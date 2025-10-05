@@ -8,8 +8,7 @@ import mongoose from "mongoose";
 const BASE = process.env.BASE_URL || "http://localhost:3001";
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const SESSION_FILE = path.join(TMP_DIR, "session.json");
-
-type Role = "renter" | "host";
+type Role = "renter" | "host" | "admin";
 type Session = {
   renter?: { token: string; id: string; email?: string };
   host?: { token: string; id: string; email?: string };
@@ -185,6 +184,26 @@ async function cmdMe() {
   const token = requireToken(as);
   const me = await http("GET", "/users/me", undefined, token);
   console.log(JSON.stringify(me, null, 2));
+}
+
+// flags:get
+async function cmdFlagsGet() {
+  const out = await http("GET", "/flags");
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// flags:set --key bookings.enabled --value false
+async function cmdFlagsSet() {
+  const key = arg("key");
+  const value = arg("value");
+  if (!key) throw new Error("Missing --key <bookings.enabled|...>");
+  if (value !== "true" && value !== "false") throw new Error("--value must be true|false");
+  const body: any = { [key]: value === "true" };
+
+  // Requires admin token
+  const token = requireToken("admin");
+  const out = await http("POST", "/admin/flags", body, token);
+  console.log(JSON.stringify(out, null, 2));
 }
 
 async function cmdAssetCreate() {
@@ -640,6 +659,14 @@ async function main() {
         await cmdBookingsCancel();
         break;
 
+      //CMD FLAGS
+      case "flags:get":
+        await cmdFlagsGet();
+        break;
+      case "flags:set":
+        await cmdFlagsSet();
+        break;
+
       default:
         console.log(
           `Usage (examples):
@@ -694,6 +721,11 @@ npm run cli -- payments:intent:create --as renter --listing <LID> --start <ISO> 
 npm run cli -- listing:set-state --id <LID> --state NE
 npm run cli -- preview --listing <LID> --start $START --end $END
 # Expect: Tax (7.50%)
+
+  # flags (B9)
+  npm run cli -- flags:get
+  npm run cli -- flags:set --key bookings.enabled --value false
+
 
 
 `

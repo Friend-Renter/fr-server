@@ -52,7 +52,7 @@ router.get(
 router.post(
   "/",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     // 🔹 no throwing: turn Zod errors into a 422 response
     const parsed = CreateAssetSchema.safeParse(req.body);
@@ -84,7 +84,7 @@ router.post(
 router.post(
   "/assets/raw",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     return jsonOk(res, { ok: true, body: req.body });
   })
