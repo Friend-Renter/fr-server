@@ -72,6 +72,28 @@ async function http(
   return json;
 }
 
+async function searchUsersApi(q: string, token: string) {
+  return http("GET", `/friends/users/search?q=${encodeURIComponent(q)}`, undefined, token);
+}
+
+/** Accepts either a 24-hex id or an email/name search term; returns a single userId (throws if none) */
+async function resolveUserId(q: string, token: string) {
+  if (isId24(q)) return q;
+  const res = await searchUsersApi(q, token);
+  const first = res?.items?.[0];
+  if (!first) throw new Error(`No user found for query: ${q}`);
+  return String(first.id);
+}
+
+async function listIncoming(token: string) {
+  const d = await http("GET", `/friends?status=incoming`, undefined, token);
+  return (d?.items || []) as Array<{ requestId: string; fromUserId: string; user?: any }>;
+}
+async function listOutgoing(token: string) {
+  const d = await http("GET", `/friends?status=outgoing`, undefined, token);
+  return (d?.items || []) as Array<{ requestId: string; toUserId: string; user?: any }>;
+}
+
 // Confirm a PaymentIntent against Stripe directly (test-only, for CLI)
 async function stripeConfirmPaymentIntent(piId: string, paymentMethod: string = "pm_card_visa") {
   const sk = process.env.STRIPE_SECRET_KEY;
@@ -575,6 +597,139 @@ async function cmdBookingsCancel() {
   console.log(JSON.stringify(out, null, 2));
 }
 
+// friends:request --as renter|host --to <emailOrId>
+async function cmdFriendsRequest() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const to = arg("to");
+  if (!to) throw new Error("Missing --to <emailOrId>");
+
+  const toUserId = await resolveUserId(to, token);
+  const out = await http("POST", "/friends/requests", { toUserId }, token);
+  if (out?.alreadyFriends) {
+    console.log(JSON.stringify({ ok: true, alreadyFriends: true }, null, 2));
+  } else {
+    console.log(JSON.stringify({ ok: true, request: out?.request }, null, 2));
+  }
+}
+
+// friends:accept --as renter|host [--id <REQ_ID> | --from <emailOrId>]
+async function cmdFriendsAccept() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const id = arg("id");
+  const from = arg("from");
+
+  let reqId = id;
+  if (!reqId) {
+    if (!from) throw new Error("Provide --id <REQUEST_ID> or --from <emailOrId>");
+    const fromId = await resolveUserId(from, token);
+    const incoming = await listIncoming(token);
+    const match = incoming.find((r) => r.fromUserId === fromId);
+    if (!match) throw new Error(`No incoming request from ${from}`);
+    reqId = match.requestId;
+  }
+
+  const out = await http("POST", `/friends/requests/${reqId}/accept`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:decline --as renter|host [--id <REQ_ID> | --from <emailOrId>]
+async function cmdFriendsDecline() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const id = arg("id");
+  const from = arg("from");
+
+  let reqId = id;
+  if (!reqId) {
+    if (!from) throw new Error("Provide --id <REQUEST_ID> or --from <emailOrId>");
+    const fromId = await resolveUserId(from, token);
+    const incoming = await listIncoming(token);
+    const match = incoming.find((r) => r.fromUserId === fromId);
+    if (!match) throw new Error(`No incoming request from ${from}`);
+    reqId = match.requestId;
+  }
+
+  const out = await http("POST", `/friends/requests/${reqId}/decline`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:list --as renter|host [--status accepted|incoming|outgoing]
+async function cmdFriendsList() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const status = arg("status", "accepted")!;
+  const out = await http("GET", `/friends?status=${encodeURIComponent(status)}`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:search --as renter|host --q "<term>"
+async function cmdFriendsSearch() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const q = arg("q");
+  if (!q) throw new Error("Missing --q");
+  const out = await searchUsersApi(q, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:status --as renter|host --user <emailOrId>
+async function cmdFriendsStatus() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const u = arg("user");
+  if (!u) throw new Error("Missing --user <emailOrId>");
+  const otherId = await resolveUserId(u, token);
+
+  const [incoming, outgoing, accepted] = await Promise.all([
+    http("GET", `/friends?status=incoming`, undefined, token),
+    http("GET", `/friends?status=outgoing`, undefined, token),
+    http("GET", `/friends?status=accepted`, undefined, token),
+  ]);
+
+  const isFriend = (accepted?.items || []).some((i: any) => i?.user?.id === otherId);
+  if (isFriend) return void console.log(`"friends"`);
+
+  const inc = (incoming?.items || []).find((i: any) => i?.fromUserId === otherId);
+  if (inc) return void console.log(`"pending_incoming" #${inc.requestId}`);
+
+  const out = (outgoing?.items || []).find((i: any) => i?.toUserId === otherId);
+  if (out) return void console.log(`"pending_outgoing" #${out.requestId}`);
+
+  console.log(`"none"`);
+}
+
+// friends:send --as renter|host --to <USER_ID>
+async function cmdFriendsSend() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const to = arg("to");
+  if (!to) throw new Error("Missing --to <USER_ID>");
+  const out = await http("POST", "/friends/requests", { toUserId: to }, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:cancel --as renter|host --id <REQUEST_ID>
+async function cmdFriendsCancel() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const id = arg("id");
+  if (!id) throw new Error("Missing --id <REQUEST_ID>");
+  const out = await http("DELETE", `/friends/requests/${id}`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
+// friends:unfriend --as renter|host --user <USER_ID>
+async function cmdFriendsUnfriend() {
+  const as: Role = (arg("as") as Role) || "renter";
+  const token = requireToken(as);
+  const user = arg("user");
+  if (!user) throw new Error("Missing --user <USER_ID>");
+  const out = await http("DELETE", `/friends/${user}`, undefined, token);
+  console.log(JSON.stringify(out, null, 2));
+}
+
 async function main() {
   const cmd = process.argv[2];
   try {
@@ -667,6 +822,37 @@ async function main() {
         await cmdFlagsSet();
         break;
 
+      // Friends
+      case "friends:request":
+        await cmdFriendsRequest();
+        break;
+      case "friends:accept":
+        await cmdFriendsAccept();
+        break;
+      case "friends:decline":
+        await cmdFriendsDecline();
+        break;
+      case "friends:list":
+        await cmdFriendsList();
+        break;
+      case "friends:search":
+        await cmdFriendsSearch();
+        break;
+      case "friends:status":
+        await cmdFriendsStatus();
+        break;
+
+      case "friends:send":
+        await cmdFriendsSend();
+        break;
+
+      case "friends:cancel":
+        await cmdFriendsCancel();
+        break;
+      case "friends:unfriend":
+        await cmdFriendsUnfriend();
+        break;
+
       default:
         console.log(
           `Usage (examples):
@@ -725,6 +911,17 @@ npm run cli -- preview --listing <LID> --start $START --end $END
   # flags (B9)
   npm run cli -- flags:get
   npm run cli -- flags:set --key bookings.enabled --value false
+
+    # friends
+  npm run cli -- friends:search --as renter --q "ava"
+  npm run cli -- friends:request --as renter --to ava6@example.com
+  npm run cli -- friends:list --as renter --status incoming
+  npm run cli -- friends:accept --as renter --from ava6@example.com
+  npm run cli -- friends:decline --as renter --from someone@example.com
+  npm run cli -- friends:status --as renter --user ava6@example.com
+npm run cli -- friends:send --as renter --to <USER_ID>
+npm run cli -- friends:cancel --as renter --id <REQUEST_ID>
+npm run cli -- friends:unfriend --as renter --user <USER_ID>
 
 
 

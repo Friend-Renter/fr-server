@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 
-import { FriendRequest, Friendship } from "./model.js";
+import { sortPair, FriendRequest, Friendship } from "./model.js";
 import { areFriends, ensurePendingRequest, acceptRequest } from "./service.js";
 import { getAuth } from "../../middlewares/auth.js";
 import { User } from "../users/model.js";
@@ -63,14 +63,12 @@ export async function postRequest(req: Request, res: Response) {
   const { userId } = getAuth(req);
   const toUserId = String(req.body?.toUserId || "");
   if (!toUserId)
-    return res
-      .status(422)
-      .json({
-        error: {
-          code: "VALIDATION",
-          details: [{ path: ["toUserId"], message: "toUserId is required" }],
-        },
-      });
+    return res.status(422).json({
+      error: {
+        code: "VALIDATION",
+        details: [{ path: ["toUserId"], message: "toUserId is required" }],
+      },
+    });
   if (toUserId === userId)
     return res
       .status(422)
@@ -108,6 +106,46 @@ export async function declineFriendRequest(req: Request, res: Response) {
   fr.status = "declined";
   await fr.save();
   return res.json({ ok: true });
+}
+
+/** DELETE /friends/requests/:id  (requester cancels their own pending request) */
+export async function cancelFriendRequest(req: Request, res: Response) {
+  const { userId } = getAuth(req);
+  const id = String(req.params.id);
+  const fr = await FriendRequest.findById(id);
+  if (!fr || fr.status !== "pending") {
+    return res.status(404).json({ error: { code: "REQUEST_NOT_FOUND" } });
+  }
+  if (fr.fromUserId !== userId) {
+    return res
+      .status(403)
+      .json({ error: { code: "FORBIDDEN", message: "Only requester can cancel" } });
+  }
+  fr.status = "canceled";
+  await fr.save();
+  return res.json({ ok: true });
+}
+
+/** DELETE /friends/:userId  (unfriend both ways) */
+export async function unfriend(req: Request, res: Response) {
+  const { userId } = getAuth(req);
+  const otherId = String(req.params.userId);
+  const [a, b] = sortPair(userId, otherId);
+
+  const r = await Friendship.deleteOne({ userA: a, userB: b });
+  // Optional: clean up any stale pending requests between these two (any direction)
+  await FriendRequest.deleteMany({
+    $or: [
+      { fromUserId: userId, toUserId: otherId, status: "pending" },
+      { fromUserId: otherId, toUserId: userId, status: "pending" },
+    ],
+  });
+
+  if (r.deletedCount === 0) {
+    // Not friends; treat as idempotent “ok”
+    return res.json({ ok: true, removed: false });
+  }
+  return res.json({ ok: true, removed: true });
 }
 
 export async function searchUsers(req: Request, res: Response) {

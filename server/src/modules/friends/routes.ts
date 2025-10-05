@@ -7,6 +7,8 @@ import {
   declineFriendRequest,
   searchUsers,
   getUserPublic,
+  cancelFriendRequest,
+  unfriend,
 } from "./controller.js";
 import { requireAuth } from "../../middlewares/auth.js";
 
@@ -16,6 +18,8 @@ friendsRouter.get("/", requireAuth, listFriends);
 friendsRouter.post("/requests", requireAuth, postRequest);
 friendsRouter.post("/requests/:id/accept", requireAuth, acceptFriendRequest);
 friendsRouter.post("/requests/:id/decline", requireAuth, declineFriendRequest);
+friendsRouter.delete("/requests/:id", requireAuth, cancelFriendRequest);
+friendsRouter.delete("/:userId", requireAuth, unfriend);
 
 // user helpers
 friendsRouter.get("/users/search", requireAuth, searchUsers);
