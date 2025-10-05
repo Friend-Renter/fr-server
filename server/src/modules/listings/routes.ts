@@ -5,16 +5,16 @@ import { z } from "zod";
 import { Listing } from "./model.js";
 import { enumerateBuckets } from "../../utils/dates.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
+import { Asset } from "../assets/model.js"; // <-- add
 import { getFlagsDoc } from "../flags/service.js";
 import { BookingLock } from "../locks/model.js";
-import { User } from "../users/model.js"; // for host name (optional)
+import { User } from "../users/model.js";
 
 const router = Router();
 
 /**
  * GET /listings
- * Public feed (minimal): cursor-less stub for now.
- * Query: ?limit=&cursor=&q=&lat=&lng=&radius=
+ * Public feed (minimal) with optional self-exclusion: ?excludeHostId=&limit=
  */
 router.get(
   "/",
@@ -27,40 +27,67 @@ router.get(
     }
 
     const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1), 50);
-    // Very simple: newest active listings first
-    const docs = await Listing.find(
-      { status: "active" },
+    const excludeHostId = req.query.excludeHostId ? String(req.query.excludeHostId) : null;
+
+    const match: any = { status: "active" };
+    if (excludeHostId && mongoose.isValidObjectId(excludeHostId)) {
+      match.hostId = { $ne: new mongoose.Types.ObjectId(excludeHostId) };
+    }
+
+    // Aggregate to join Asset for title/media
+    const docs = await Listing.aggregate([
+      { $match: match },
+      { $sort: { createdAt: -1 } },
+      { $limit: limit },
       {
-        _id: 1,
-        title: 1,
-        photos: 1,
-        pricing: 1,
-        hostId: 1,
-        "location.city": 1,
-        "location.lat": 1,
-        "location.lng": 1,
-        createdAt: 1,
-      }
-    )
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
+        $lookup: {
+          from: "assets",
+          localField: "assetId",
+          foreignField: "_id",
+          as: "asset",
+        },
+      },
+      { $unwind: { path: "$asset", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 1,
+          hostId: 1,
+          pricing: 1,
+          "location.point": 1,
+          "location.state": 1,
+          assetTitle: "$asset.title",
+          assetMedia: "$asset.media",
+          createdAt: 1,
+        },
+      },
+    ]);
 
     const showPrice = !!flags.flags["pricing.enabled"];
-    const items = docs.map((d) => ({
-      id: String(d._id),
-      title: d.title,
-      photos: Array.isArray(d.photos) ? d.photos : [],
-      pricePerDay: showPrice ? (d?.pricing?.perDay ?? d?.pricing?.basePerDay ?? null) : null,
-      location: d.location
-        ? {
-            city: d.location.city || null,
-            lat: d.location.lat ?? null,
-            lng: d.location.lng ?? null,
-          }
-        : null,
-      host: { id: String(d.hostId) },
-    }));
+    const items = docs.map((d: any) => {
+      const cents = d?.pricing?.baseDailyCents ?? null;
+      const pricePerDay = showPrice && typeof cents === "number" ? Math.round(cents) / 100 : null;
+      const photos =
+        Array.isArray(d?.assetMedia) && d.assetMedia.length
+          ? d.assetMedia.map((m: any) => m?.url).filter(Boolean)
+          : [];
+
+      const coords = d?.location?.point?.coordinates; // [lng, lat]
+      const lng = Array.isArray(coords) ? coords[0] : null;
+      const lat = Array.isArray(coords) ? coords[1] : null;
+
+      return {
+        id: String(d._id),
+        title: d.assetTitle || "Listing",
+        photos,
+        pricePerDay,
+        location: {
+          state: d?.location?.state || null,
+          lat,
+          lng,
+        },
+        host: { id: String(d.hostId) },
+      };
+    });
 
     return jsonOk(res, { items, nextCursor: null });
   })
@@ -68,66 +95,62 @@ router.get(
 
 /**
  * GET /listings/:id
- * Public listing details
+ * Public listing details (joined with Asset for title/media)
  */
 router.get(
   "/:id",
   asyncHandler(async (req, res) => {
     const flags = await getFlagsDoc();
-    // if (!flags["listings.enabled"]) {
-    //   return res
-    //     .status(423)
-    //     .json({ error: { code: "FEATURE_DISABLED", feature: "listings.enabled" } });
-    // }
+    if (!flags.flags.listings?.enabled) {
+      return res
+        .status(423)
+        .json({ error: { code: "FEATURE_DISABLED", feature: "listings.enabled" } });
+    }
 
     const id = req.params.id;
     if (!mongoose.isValidObjectId(id)) {
       return res.status(422).json({ error: { code: "INVALID_ID", message: "Invalid listing id" } });
     }
 
-    const d = await Listing.findById(id, {
-      _id: 1,
-      title: 1,
-      photos: 1,
-      description: 1,
-      pricing: 1,
-      status: 1,
-      hostId: 1,
-      "location.city": 1,
-      "location.lat": 1,
-      "location.lng": 1,
-      badges: 1, // friendsOnly / deposit / approval, if you store them
-    }).lean();
-
+    const d = await Listing.findById(id).lean();
     if (!d || d.status !== "active") {
       return res.status(404).json({ error: { code: "LISTING_NOT_FOUND" } });
     }
 
+    const asset = await Asset.findById(d.assetId, { title: 1, media: 1 }).lean();
     const showPrice = !!flags.flags["pricing.enabled"];
-    // Optional: get host name
+    const cents = d?.pricing?.baseDailyCents ?? null;
+    const pricePerDay = showPrice && typeof cents === "number" ? Math.round(cents) / 100 : null;
+
+    // Optional: host name
     let host = { id: String(d.hostId) };
     try {
       const h = await User.findById(d.hostId, { firstName: 1, lastName: 1 }).lean();
       if (h) host = { ...host, name: `${h.firstName ?? ""} ${h.lastName ?? ""}`.trim() };
     } catch {}
 
+    const coords = d?.location?.point?.coordinates; // [lng, lat]
+    const lng = Array.isArray(coords) ? coords[0] : null;
+    const lat = Array.isArray(coords) ? coords[1] : null;
+
     return jsonOk(res, {
       id: String(d._id),
-      title: d.title,
-      photos: Array.isArray(d.photos) ? d.photos : [],
-      description: d.description ?? null,
-      pricePerDay: showPrice ? (d?.pricing?.perDay ?? d?.pricing?.basePerDay ?? null) : null,
-      location: d.location
-        ? {
-            city: d.location.city || null,
-            lat: d.location.lat ?? null,
-            lng: d.location.lng ?? null,
-          }
-        : null,
+      title: asset?.title || "Listing",
+      photos:
+        Array.isArray(asset?.media) && asset.media.length
+          ? asset.media.map((m: any) => m?.url).filter(Boolean)
+          : [],
+      description: null,
+      pricePerDay,
+      location: {
+        state: d?.location?.state || null,
+        lat,
+        lng,
+      },
       host,
-      friendsOnly: !!d?.badges?.friendsOnly,
-      depositHold: d?.badges?.depositHold ?? null,
-      requiresHostApproval: !!d?.badges?.requiresHostApproval,
+      friendsOnly: false,
+      depositHold: d?.pricing?.depositCents ? Math.round(d.pricing.depositCents) / 100 : null,
+      requiresHostApproval: !d?.instantBook,
     });
   })
 );
