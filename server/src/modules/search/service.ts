@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-import { connectMongo } from "../../config/db";
+import { connectMongo } from "../../config/db.js";
 
 type SearchParams = {
   lat: number;
