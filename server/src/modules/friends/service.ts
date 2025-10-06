@@ -38,7 +38,7 @@ export async function acceptRequest(reqDoc: FriendRequestDoc) {
   reqDoc.status = "accepted";
   await reqDoc.save();
 
-  const [userA, userB] = sortPair(reqDoc.fromUserId, reqDoc.toUserId);
+  const [userA, userB] = sortPair(String(reqDoc.fromUserId), String(reqDoc.toUserId));
   try {
     await Friendship.updateOne(
       { userA, userB },
@@ -71,7 +71,7 @@ function httpError(status: number, code: string, message?: string) {
 export async function acceptFriendRequestById(actorId: string, requestId: string) {
   const fr = await FriendRequest.findById(requestId);
   if (!fr || fr.status !== "pending") throw httpError(404, "REQUEST_NOT_FOUND");
-  if (fr.toUserId !== actorId) throw httpError(403, "FORBIDDEN");
+  if (String(fr.toUserId) !== String(actorId)) throw httpError(403, "FORBIDDEN");
   await acceptRequest(fr);
   return fr;
 }

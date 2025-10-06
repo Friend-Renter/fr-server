@@ -32,7 +32,6 @@ const CreateSchema = z.object({
 router.post(
   "/",
   requireAuth,
-  requireRole("renter"),
   requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
@@ -65,7 +64,7 @@ const AcceptSchema = z.object({
 router.post(
   "/:id/accept",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
     const { id } = IdParam.parse(req.params);
@@ -82,7 +81,7 @@ router.post(
 router.post(
   "/:id/decline",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
     const { id } = IdParam.parse(req.params);

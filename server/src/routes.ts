@@ -9,7 +9,7 @@ import { requireAuth, requireRole } from "./middlewares/auth.js";
 import adminRouter from "./modules/admin/routes.js";
 import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
-import bookingRequestsRoutes from "./modules/bookingRequests/routes.js";
+import bookingRequestsRoutes from "./modules/bookingrequests/routes.js";
 import bookingsRouter from "./modules/bookings/routes.js";
 import {
   publicRouter as flagsRouter,
@@ -35,7 +35,7 @@ void ensureFlagsSeeded();
 router.use("/auth", authRouter);
 router.use("/bookings", bookingsRouter);
 router.use("/media", mediaRouter);
-router.use("/bookingRequests", bookingRequestsRoutes);
+router.use("/bookingrequests", bookingRequestsRoutes);
 router.use("/notifications", notificationsRouter);
 router.use("/payments", paymentsRouter);
 router.use("/assets", assetsRouter); // defines /assets

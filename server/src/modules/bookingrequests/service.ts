@@ -105,7 +105,15 @@ export async function listBookingRequests(params: {
     };
   });
 
-  const nextCursor = docs.length ? encodeCursor(docs[docs.length - 1]) : null;
+  const last = docs[docs.length - 1];
+  const nextCursor =
+    docs.length && last
+      ? encodeCursor({
+          createdAt: new Date((last as any).createdAt ?? Date.now()),
+          _id: (last as any)._id,
+        })
+      : null;
+
   return { items, nextCursor };
 }
 

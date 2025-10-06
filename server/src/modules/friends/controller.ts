@@ -27,43 +27,53 @@ function toObjectIds(ids: string[]): mongoose.Types.ObjectId[] {
 
 export async function listFriends(req: Request, res: Response) {
   const { userId } = getAuth(req);
+  const userIdStr = String(userId);
   const status = String(req.query.status || "accepted");
-
   if (status === "accepted") {
     const docs = await Friendship.find({ $or: [{ userA: userId }, { userB: userId }] }).lean();
-    const otherIds = docs.map((d) => (d.userA === userId ? d.userB : d.userA));
+
+    // 🧩 Convert ObjectIds safely
+    const otherIds = docs.map((d) =>
+      String(d.userA) === userIdStr ? String(d.userB) : String(d.userA)
+    );
+
     const valid = toObjectIds(otherIds);
     const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
-    return res.json({ items: otherIds.map((id) => ({ user: pubUser(map.get(id)) })) });
+
+    return res.json({
+      items: otherIds.map((id) => ({ user: pubUser(map.get(String(id))) })),
+    });
   }
 
   if (status === "incoming") {
     const docs = await FriendRequest.find({ toUserId: userId, status: "pending" }).lean();
-    const fromIds = docs.map((d) => d.fromUserId);
+    const fromIds = docs.map((d) => String(d.fromUserId));
     const valid = toObjectIds(fromIds);
     const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
+
     return res.json({
       items: docs.map((d) => ({
         requestId: String(d._id),
-        fromUserId: d.fromUserId,
-        user: pubUser(map.get(d.fromUserId)),
+        fromUserId: String(d.fromUserId),
+        user: pubUser(map.get(String(d.fromUserId))),
       })),
     });
   }
 
   if (status === "outgoing") {
     const docs = await FriendRequest.find({ fromUserId: userId, status: "pending" }).lean();
-    const toIds = docs.map((d) => d.toUserId);
+    const toIds = docs.map((d) => String(d.toUserId));
     const valid = toObjectIds(toIds);
     const users = valid.length ? await User.find({ _id: { $in: valid } }).lean() : [];
     const map = new Map(users.map((u) => [String(u._id), u]));
+
     return res.json({
       items: docs.map((d) => ({
         requestId: String(d._id),
-        toUserId: d.toUserId,
-        user: pubUser(map.get(d.toUserId)),
+        toUserId: String(d.toUserId),
+        user: pubUser(map.get(String(d.toUserId))),
       })),
     });
   }
@@ -141,7 +151,8 @@ export async function acceptFriendRequest(req: Request, res: Response) {
   const fr = await FriendRequest.findById(id);
   if (!fr || fr.status !== "pending")
     return res.status(404).json({ error: { code: "REQUEST_NOT_FOUND" } });
-  if (fr.toUserId !== userId) return res.status(403).json({ error: { code: "FORBIDDEN" } });
+  if (String(fr.toUserId) !== String(userId))
+    return res.status(403).json({ error: { code: "FORBIDDEN" } });
 
   await acceptRequest(fr);
   // notify original requester
@@ -149,7 +160,7 @@ export async function acceptFriendRequest(req: Request, res: Response) {
     try {
       const actor = await User.findById(userId, { fullName: 1 }).lean();
       await notify({
-        userId: fr.fromUserId,
+        userId: String(fr.fromUserId),
         type: "friend.request_accepted",
         actor: { id: userId, name: actor?.fullName },
         context: { requestId: String(fr._id) },
@@ -167,7 +178,8 @@ export async function declineFriendRequest(req: Request, res: Response) {
   const fr = await FriendRequest.findById(id);
   if (!fr || fr.status !== "pending")
     return res.status(404).json({ error: { code: "REQUEST_NOT_FOUND" } });
-  if (fr.toUserId !== userId) return res.status(403).json({ error: { code: "FORBIDDEN" } });
+  if (String(fr.toUserId) !== String(userId))
+    return res.status(403).json({ error: { code: "FORBIDDEN" } });
 
   fr.status = "declined";
   await fr.save();
@@ -201,7 +213,7 @@ export async function cancelFriendRequest(req: Request, res: Response) {
   if (!fr || fr.status !== "pending") {
     return res.status(404).json({ error: { code: "REQUEST_NOT_FOUND" } });
   }
-  if (fr.fromUserId !== userId) {
+  if (String(fr.fromUserId) !== String(userId)) {
     return res
       .status(403)
       .json({ error: { code: "FORBIDDEN", message: "Only requester can cancel" } });
@@ -279,7 +291,7 @@ export async function guardFriendshipOrEnsurePending(
 
   if (pending) {
     relatedRequestId = String(pending._id);
-    direction = pending.fromUserId === guestId ? "outgoing" : "incoming";
+    direction = String(pending.fromUserId) === String(guestId) ? "outgoing" : "incoming";
   }
 
   const host = await User.findById(hostId, { fullName: 1, firstName: 1, lastName: 1 }).lean();
@@ -313,7 +325,7 @@ export async function statusWith(req: Request, res: Response) {
 
   if (!pending) return res.json({ areFriends: false, pending: null });
 
-  const direction = pending.fromUserId === me ? "outgoing" : "incoming";
+  const direction = String(pending.fromUserId) === String(me) ? "outgoing" : "incoming";
   return res.json({
     areFriends: false,
     pending: { id: String(pending._id), direction },

@@ -61,8 +61,8 @@ router.get(
         },
       },
     ]);
+    const showPrice = !!flags.flags.pricing?.enabled;
 
-    const showPrice = !!flags.flags["pricing.enabled"];
     const items = docs.map((d: any) => {
       const cents = d?.pricing?.baseDailyCents ?? null;
       const pricePerDay = showPrice && typeof cents === "number" ? Math.round(cents) / 100 : null;
@@ -118,15 +118,16 @@ router.get(
     }
 
     const asset = await Asset.findById(d.assetId, { title: 1, media: 1 }).lean();
-    const showPrice = !!flags.flags["pricing.enabled"];
+    const showPrice = !!flags.flags.pricing?.enabled;
+
     const cents = d?.pricing?.baseDailyCents ?? null;
     const pricePerDay = showPrice && typeof cents === "number" ? Math.round(cents) / 100 : null;
 
     // Optional: host name
-    let host = { id: String(d.hostId) };
+    let host: { id: string; name?: string } = { id: String(d.hostId) };
     try {
       const h = await User.findById(d.hostId, { firstName: 1, lastName: 1 }).lean();
-      if (h) host = { ...host, name: `${h.firstName ?? ""} ${h.lastName ?? ""}`.trim() };
+      if (h) host.name = `${h.firstName ?? ""} ${h.lastName ?? ""}`.trim();
     } catch {}
 
     const coords = d?.location?.point?.coordinates; // [lng, lat]

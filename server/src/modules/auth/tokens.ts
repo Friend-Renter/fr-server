@@ -5,7 +5,7 @@ import jwt, { type JwtPayload, type SignOptions, type Secret } from "jsonwebtoke
 
 import { env } from "../../config/env.js";
 
-export type Role = "renter" | "host" | "admin";
+export type Role = "user" | "admin";
 
 export type AccessClaims = JwtPayload & {
   sub: string; // user id

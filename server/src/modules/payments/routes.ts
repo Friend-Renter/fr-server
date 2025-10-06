@@ -27,7 +27,6 @@ const IntentSchema = z.object({
 router.post(
   "/intents",
   requireAuth,
-  requireRole("renter"),
   requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);

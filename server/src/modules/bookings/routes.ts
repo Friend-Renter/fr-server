@@ -11,6 +11,7 @@ import {
   cancelPendingBooking,
 } from "./service.js";
 import { key as rkey } from "../../config/redis.js";
+import { stripe } from "../../lib/stripe.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
 import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
@@ -104,7 +105,7 @@ const IdParam = z.object({ id: z.string().length(24) });
 router.post(
   "/:id/accept",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);
@@ -116,7 +117,7 @@ router.post(
 router.post(
   "/:id/decline",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);
@@ -128,7 +129,7 @@ router.post(
 router.post(
   "/:id/cancel",
   requireAuth,
-  requireRole("renter"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);

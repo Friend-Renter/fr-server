@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 const BASE = process.env.BASE_URL || "http://localhost:3001";
 const TMP_DIR = path.join(process.cwd(), "tmp");
 const SESSION_FILE = path.join(TMP_DIR, "session.json");
-type Role = "renter" | "host" | "admin";
+export type Role = "user" | "admin";
 type Session = {
   renter?: { token: string; id: string; email?: string };
   host?: { token: string; id: string; email?: string };
