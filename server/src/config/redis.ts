@@ -7,32 +7,52 @@ let client: RedisClientType | null = null;
 
 function getClient(): RedisClientType {
   if (!client) {
+    const useTls = env.REDIS_URL?.startsWith("rediss://");
+
     client = createClient({
       url: env.REDIS_URL,
-      socket: { connectTimeout: 2000 },
+      socket: {
+        tls: useTls, // enable TLS when needed
+        connectTimeout: 3000,
+        keepAlive: 5000, // prevent idle disconnects
+        reconnectStrategy: (retries) => {
+          // Backoff retry: wait up to 3s between retries
+          const delay = Math.min(retries * 200, 3000);
+          console.log(`[redis] reconnecting in ${delay}ms`);
+          return delay;
+        },
+      },
     });
-    client.on("error", (e) => {
-      // Avoid noisy unhandled errors; health endpoint will report status instead.
 
+    client.on("error", (e) => {
       console.warn("[redis] client error:", (e as any)?.message || e);
     });
+
+    client.on("connect", () => {
+      console.log("[redis] connecting...");
+    });
+
+    client.on("ready", () => {
+      console.log("[redis] connected and ready ✅");
+    });
   }
+
   return client;
 }
 
-export function redisClient() {
-  return getClient();
+export async function redisClient() {
+  const c = getClient();
+  if (!c.isOpen) await c.connect();
+  return c;
 }
 
-/** Build a namespaced Redis key: e.g., fr:dev:rate:ip:1.2.3.4 */
 export function key(...parts: Array<string | number>): string {
   return `${env.REDIS_NAMESPACE}:${parts.join(":")}`;
 }
 
 export async function pingRedis(): Promise<{ status: "ok" | "error"; message?: string }> {
-  const c = getClient();
   try {
-    if (!c.isOpen) await c.connect();
+    const c = await redisClient();
     await c.ping();
     return { status: "ok" };
   } catch (err: any) {
@@ -41,7 +61,5 @@ export async function pingRedis(): Promise<{ status: "ok" | "error"; message?: s
 }
 
 export async function closeRedis() {
-  if (client?.isOpen) {
-    await client.quit();
-  }
+  if (client?.isOpen) await client.quit();
 }
