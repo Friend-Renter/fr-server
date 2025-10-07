@@ -125,8 +125,8 @@ function applyDotPatch(base: Flags, dotPatch: Record<string, boolean>): Flags {
 }
 
 async function readFromRedis(): Promise<FlagsDoc | null> {
-  const r = redisClient();
-  if (!r.isOpen) await r.connect();
+  const r = await redisClient();
+
   const raw = await r.get(key("flags"));
   if (!raw) return null;
   try {
@@ -146,8 +146,8 @@ async function readFromRedis(): Promise<FlagsDoc | null> {
 }
 
 async function writeToRedis(doc: FlagsDoc): Promise<void> {
-  const r = redisClient();
-  if (!r.isOpen) await r.connect();
+  const r = await redisClient();
+
   await r.set(key("flags"), JSON.stringify(doc));
 }
 

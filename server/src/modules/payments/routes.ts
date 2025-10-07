@@ -72,8 +72,8 @@ router.post(
       .digest("hex");
     const cacheKey = key("pi", "intent", hash);
 
-    const r = redisClient();
-    if (!r.isOpen) await r.connect();
+    const r = await redisClient();
+
     const cached = await r.get(cacheKey);
     if (cached) {
       const existing = await stripe.paymentIntents.retrieve(cached).catch(() => null);

@@ -22,8 +22,8 @@ router.post(
     }
 
     const seenKey = key("stripe", "evt", String(evt.id));
-    const r = redisClient();
-    if (!r.isOpen) await r.connect();
+    const r = await redisClient();
+
     const set = await r.set(seenKey, "1", { NX: true, EX: 60 * 60 * 24 * 7 });
     if (set !== "OK") {
       return res.status(200).send("ok"); // already processed
