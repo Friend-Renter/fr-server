@@ -14,7 +14,8 @@ function getClient(): RedisClientType {
       socket: {
         tls: useTls, // enable TLS when needed
         connectTimeout: 3000,
-        keepAlive: 5000, // prevent idle disconnects
+        keepAlive: true,
+        // prevent idle disconnects
         reconnectStrategy: (retries) => {
           // Backoff retry: wait up to 3s between retries
           const delay = Math.min(retries * 200, 3000);

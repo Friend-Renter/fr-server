@@ -10,8 +10,7 @@ type Stored<T> = { status: number; body: T };
 
 // Get a connected client once
 async function getClient(): Promise<RedisClientType> {
-  const c = redisClient();
-  if (!c.isOpen) await c.connect();
+  const c = await redisClient();
   return c;
 }
 
