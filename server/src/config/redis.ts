@@ -7,41 +7,31 @@ let client: RedisClientType | null = null;
 
 function getClient(): RedisClientType {
   if (!client) {
-    const useTls = env.REDIS_URL?.startsWith("rediss://");
+    const url = env.REDIS_URL;
+    const isTls = url.startsWith("rediss://");
 
     client = createClient({
-      url: env.REDIS_URL,
+      url,
       socket: {
-        tls: useTls, // enable TLS when needed
         connectTimeout: 3000,
         keepAlive: true,
-        // prevent idle disconnects
-        reconnectStrategy: (retries) => {
-          // Backoff retry: wait up to 3s between retries
-          const delay = Math.min(retries * 200, 3000);
-          console.log(`[redis] reconnecting in ${delay}ms`);
-          return delay;
-        },
+        reconnectStrategy: (retries) => Math.min(retries * 200, 3000),
       },
+      ...(isTls ? { tls: {} } : {}), // ✅ put tls at top-level, not under socket
     });
 
     client.on("error", (e) => {
       console.warn("[redis] client error:", (e as any)?.message || e);
     });
 
-    client.on("connect", () => {
-      console.log("[redis] connecting...");
-    });
-
-    client.on("ready", () => {
-      console.log("[redis] connected and ready ✅");
-    });
+    client.on("connect", () => console.log("[redis] connecting..."));
+    client.on("ready", () => console.log("[redis] ready ✅"));
   }
 
   return client;
 }
 
-export async function redisClient() {
+export async function redisClient(): Promise<RedisClientType> {
   const c = getClient();
   if (!c.isOpen) await c.connect();
   return c;
