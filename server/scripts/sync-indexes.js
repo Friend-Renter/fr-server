@@ -1,6 +1,6 @@
 import "dotenv/config";
 import mongoose from "mongoose";
-import { connectMongo } from "../src/config/db";
+import { connectMongo } from "../src/config/db.js";
 // Import models to register their schemas with Mongoose in this process
 import "../src/modules/users/model";
 import "../src/modules/assets/model";

@@ -10,6 +10,7 @@ import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
 import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
 import { buildBucketsAndGranularity } from "../bookings/service.js";
+import { guardFriendshipOrEnsurePending } from "../friends/controller.js";
 import { Listing } from "../listings/model.js";
 import { lockBuckets } from "../locks/service.js";
 import { computeQuote } from "../pricing/calc.js";
@@ -26,7 +27,6 @@ const IntentSchema = z.object({
 router.post(
   "/intents",
   requireAuth,
-  requireRole("renter"),
   requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
@@ -72,8 +72,8 @@ router.post(
       .digest("hex");
     const cacheKey = key("pi", "intent", hash);
 
-    const r = redisClient();
-    if (!r.isOpen) await r.connect();
+    const r = await redisClient();
+
     const cached = await r.get(cacheKey);
     if (cached) {
       const existing = await stripe.paymentIntents.retrieve(cached).catch(() => null);
@@ -94,6 +94,14 @@ router.post(
           discountCents: q.discountCents,
         });
       }
+    }
+
+    // Resolve hostId from listingDoc and enforce friendship (no money/locks until friends)
+    const hostId = String(listingDoc.hostId);
+    const guard = await guardFriendshipOrEnsurePending(userId, hostId);
+    if (guard) {
+      // Mirror your bookings route shape (403 + { error: guard })
+      return res.status(403).json({ error: guard });
     }
 
     const pi = await stripe.paymentIntents.create(

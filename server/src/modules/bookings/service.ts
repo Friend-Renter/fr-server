@@ -371,7 +371,7 @@ export async function createBooking(args: { renterId: string; paymentIntentId: s
     paymentStatus: "paid",
   });
 
-  await retagLocks(String(listingLean._id), piReason, `booking:${doc._id.toString()}`);
+  await retagLocks(String(listingLean._id), piReason, `booking:${String(doc._id)}`);
   return doc;
 }
 

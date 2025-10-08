@@ -1,7 +1,7 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 
-import { connectMongo } from "../src/config/db";
+import { connectMongo } from "../src/config/db.js";
 // ensure models are registered
 import "../src/modules/users/model";
 import "../src/modules/assets/model";

@@ -11,10 +11,13 @@ import {
   cancelPendingBooking,
 } from "./service.js";
 import { key as rkey } from "../../config/redis.js";
+import { stripe } from "../../lib/stripe.js";
 import { requireAuth, requireRole, getAuth } from "../../middlewares/auth.js";
 import { requireFlag } from "../../middlewares/flags.js";
 import { asyncHandler, jsonOk } from "../../utils/http.js";
 import { getOrSetIdempotent } from "../../utils/idemptoency.js";
+import { guardFriendshipOrEnsurePending } from "../friends/controller.js";
+import { Listing } from "../listings/model.js";
 
 const router = Router();
 
@@ -25,11 +28,37 @@ const CreateSchema = z.object({
 router.post(
   "/",
   requireAuth,
-  requireRole("renter"),
   requireFlag("bookings.enabled"),
   asyncHandler(async (req, res) => {
     const { userId } = getAuth(req);
     const { paymentIntentId } = CreateSchema.parse(req.body);
+
+    // 1) Fetch PI from Stripe; we rely on metadata set in /payments/intents
+    const pi = await stripe.paymentIntents.retrieve(paymentIntentId).catch(() => null);
+    if (!pi) {
+      return res
+        .status(422)
+        .json({ error: { code: "INVALID_PI", message: "Unknown PaymentIntent" } });
+    }
+    const listingId = String(pi.metadata?.listingId || "");
+    if (!listingId || !/^[0-9a-f]{24}$/i.test(listingId)) {
+      return res
+        .status(422)
+        .json({ error: { code: "INVALID_PI", message: "Missing listingId metadata" } });
+    }
+
+    // 2) Resolve hostId from listing
+    const listing = await Listing.findById(listingId, { hostId: 1, status: 1 }).lean();
+    if (!listing || listing.status !== "active") {
+      return res.status(404).json({ error: { code: "LISTING_NOT_FOUND" } });
+    }
+    const hostId = String(listing.hostId);
+
+    // 3) Enforce friendship (idempotent helper will auto-create/ensure pending request)
+    const guard = await guardFriendshipOrEnsurePending(userId, hostId);
+    if (guard) {
+      return res.status(403).json({ error: guard });
+    }
 
     const doc = await createBooking({ renterId: userId, paymentIntentId });
     jsonOk(res, {
@@ -76,7 +105,7 @@ const IdParam = z.object({ id: z.string().length(24) });
 router.post(
   "/:id/accept",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);
@@ -88,7 +117,7 @@ router.post(
 router.post(
   "/:id/decline",
   requireAuth,
-  requireRole("host"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);
@@ -100,7 +129,7 @@ router.post(
 router.post(
   "/:id/cancel",
   requireAuth,
-  requireRole("renter"),
+
   asyncHandler(async (req, res) => {
     const { id } = IdParam.parse(req.params);
     const { userId } = getAuth(req);

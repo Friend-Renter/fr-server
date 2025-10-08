@@ -3,8 +3,8 @@ import mongoose, { Schema, Model } from "mongoose";
 export type FriendRequestStatus = "pending" | "accepted" | "declined" | "canceled";
 
 export interface FriendRequestDoc extends mongoose.Document {
-  fromUserId: string;
-  toUserId: string;
+  fromUserId: mongoose.Types.ObjectId;
+  toUserId: mongoose.Types.ObjectId;
   status: FriendRequestStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -12,8 +12,8 @@ export interface FriendRequestDoc extends mongoose.Document {
 
 const FriendRequestSchema = new Schema<FriendRequestDoc>(
   {
-    fromUserId: { type: String, required: true, index: true },
-    toUserId: { type: String, required: true, index: true },
+    fromUserId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    toUserId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     status: {
       type: String,
       enum: ["pending", "accepted", "declined", "canceled"],
@@ -35,15 +35,15 @@ export const FriendRequest: Model<FriendRequestDoc> =
   mongoose.model<FriendRequestDoc>("FriendRequest", FriendRequestSchema);
 
 export interface FriendshipDoc extends mongoose.Document {
-  userA: string; // lexicographically smaller id
-  userB: string; // lexicographically larger id
+  userA: mongoose.Types.ObjectId;
+  userB: mongoose.Types.ObjectId;
   createdAt: Date;
 }
 
 const FriendshipSchema = new Schema<FriendshipDoc>(
   {
-    userA: { type: String, required: true, index: true },
-    userB: { type: String, required: true, index: true },
+    userA: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    userB: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

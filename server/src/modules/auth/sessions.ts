@@ -13,10 +13,6 @@ function ttlFromExp(exp?: number): number {
   return Math.max(ttl, 1);
 }
 
-async function ensureOpen(c: RedisClientType) {
-  if (!c.isOpen) await c.connect();
-}
-
 export async function persistSession(args: {
   userId: string;
   jti: string;
@@ -25,8 +21,8 @@ export async function persistSession(args: {
   ip?: string | null;
   ua?: string | null;
 }) {
-  const c = redisClient();
-  await ensureOpen(c);
+  const c = await redisClient();
+
   const k = sessionKey(args.userId, args.jti);
   const v = JSON.stringify({
     uid: args.userId,
@@ -40,22 +36,22 @@ export async function persistSession(args: {
 }
 
 export async function isSessionActive(userId: string, jti: string): Promise<boolean> {
-  const c = redisClient();
-  await ensureOpen(c);
+  const c = await redisClient();
+
   const exists = await c.exists(sessionKey(userId, jti));
   return exists === 1;
 }
 
 export async function revokeSession(userId: string, jti: string): Promise<void> {
-  const c = redisClient();
-  await ensureOpen(c);
+  const c = await redisClient();
+
   await c.del(sessionKey(userId, jti));
 }
 
 // (Optional) revoke all for a user — not used yet, but handy later
 export async function revokeAllSessionsForUser(userId: string): Promise<number> {
-  const c = redisClient();
-  await ensureOpen(c);
+  const c = await redisClient();
+
   const prefix = key("sess", userId, ""); // fr:dev:sess:<uid>:
   const iter = c.scanIterator({ MATCH: `${prefix}*`, COUNT: 100 });
 

@@ -9,6 +9,7 @@ import { requireAuth, requireRole } from "./middlewares/auth.js";
 import adminRouter from "./modules/admin/routes.js";
 import assetsRouter from "./modules/assets/routes.js";
 import authRouter from "./modules/auth/routes.js";
+import bookingRequestsRoutes from "./modules/bookingrequests/routes.js";
 import bookingsRouter from "./modules/bookings/routes.js";
 import {
   publicRouter as flagsRouter,
@@ -18,6 +19,7 @@ import { ensureFlagsSeeded, getFlagsSnapshotCompact } from "./modules/flags/serv
 import { friendsRouter } from "./modules/friends/routes.js";
 import listingsRouter from "./modules/listings/routes.js";
 import mediaRouter from "./modules/media/routes.js";
+import notificationsRouter from "./modules/notifications/routes.js";
 import paymentsRouter from "./modules/payments/routes.js";
 import quotesRouter from "./modules/quotes/routes.js";
 import searchRouter from "./modules/search/routes.js";
@@ -33,6 +35,8 @@ void ensureFlagsSeeded();
 router.use("/auth", authRouter);
 router.use("/bookings", bookingsRouter);
 router.use("/media", mediaRouter);
+router.use("/bookingrequests", bookingRequestsRoutes);
+router.use("/notifications", notificationsRouter);
 router.use("/payments", paymentsRouter);
 router.use("/assets", assetsRouter); // defines /assets
 router.use("/search", searchRouter); // GET /search

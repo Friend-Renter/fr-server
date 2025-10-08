@@ -21,7 +21,7 @@ export async function createUser(input: CreateUserInput): Promise<UserDoc> {
     email: input.email,
     firstName: input.firstName,
     lastName: input.lastName,
-    role: input.role ?? "renter",
+    role: input.role ?? "user",
   } as Partial<UserDoc>) as any;
 
   // trigger hashing via virtual

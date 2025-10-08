@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-import { writeAudit } from "../audit/service";
+import { writeAudit } from "../audit/service.js";
 import { FeatureFlag } from "../features/model.js";
 import { Listing } from "../listings/model.js";
 import { User } from "../users/model.js";

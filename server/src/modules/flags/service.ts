@@ -96,14 +96,14 @@ function toDotBooleanPatch(input: unknown): Record<string, boolean> {
       // dot-path form: { "bookings.enabled": true }
       if (!ALLOW_SET.has(k)) fail("Unknown flag key", { key: k });
       if (typeof v !== "boolean") fail("Flag value must be boolean", { key: k, value: v });
-      dot[k] = v;
+      dot[k] = v as boolean;
     } else if (typeof v === "object" && v !== null) {
       // nested form: { bookings: { enabled: true } }
       for (const [k2, v2] of Object.entries(v as Record<string, unknown>)) {
         const path = `${k}.${k2}`;
         if (!ALLOW_SET.has(path)) fail("Unknown flag key", { key: path });
         if (typeof v2 !== "boolean") fail("Flag value must be boolean", { key: path, value: v2 });
-        dot[path] = v2;
+        dot[path] = v2 as boolean;
       }
     } else {
       fail("Invalid flag structure", { key: k, value: v });
@@ -118,15 +118,15 @@ function applyDotPatch(base: Flags, dotPatch: Record<string, boolean>): Flags {
     const [root, leaf] = path.split(".");
     next = {
       ...next,
-      [root]: { ...(next as any)[root], [leaf]: val },
+      [root]: { ...(next as any)[root], [leaf]: Boolean(val) },
     } as Flags;
   }
   return next;
 }
 
 async function readFromRedis(): Promise<FlagsDoc | null> {
-  const r = redisClient();
-  if (!r.isOpen) await r.connect();
+  const r = await redisClient();
+
   const raw = await r.get(key("flags"));
   if (!raw) return null;
   try {
@@ -146,8 +146,8 @@ async function readFromRedis(): Promise<FlagsDoc | null> {
 }
 
 async function writeToRedis(doc: FlagsDoc): Promise<void> {
-  const r = redisClient();
-  if (!r.isOpen) await r.connect();
+  const r = await redisClient();
+
   await r.set(key("flags"), JSON.stringify(doc));
 }
 

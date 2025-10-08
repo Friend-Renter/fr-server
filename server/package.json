@@ -13,7 +13,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "test": "jest --passWithNoTests",
-    "prepare": "husky",
+    "prepare": "if [ \"$NODE_ENV\" != \"production\" ]; then husky; fi",
     "db:sync-indexes": "tsx scripts/sync-indexes.ts",
     "cli": "tsx scripts/cli.ts",
     "c7": "tsx scripts/c7.ts",
@@ -38,10 +38,12 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.888.0",
     "@aws-sdk/s3-request-presigner": "^3.888.0",
+    "@parse/node-apn": "^6.2.0",
     "bcrypt": "^6.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "firebase-admin": "^12.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",
@@ -50,7 +52,9 @@
     "redis": "^5.8.2",
     "stripe": "^18.5.0",
     "winston": "^3.17.0",
-    "zod": "^4.1.5"
+    "zod": "^4.1.5",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -69,8 +73,6 @@
     "lint-staged": "^16.1.5",
     "prettier": "^3.6.2",
     "ts-jest": "^29.4.1",
-    "ts-node-dev": "^2.0.0",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "ts-node-dev": "^2.0.0"
   }
 }
